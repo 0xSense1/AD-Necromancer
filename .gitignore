@@ -1,0 +1,13 @@
+# Binaries
+ad-necromancer.exe
+*.exe
+*.bin
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Go related
+vendor/
+go.sum
