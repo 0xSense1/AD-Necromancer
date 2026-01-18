@@ -274,6 +274,15 @@ func main() {
 			fmt.Println()
 		}
 
+		// [MITRE ATT&CK MAPPING] Section (minimal, at the end)
+		if len(p.MitreAttack) > 0 {
+			fmt.Println(ColorCyan + "[MITRE ATT&CK MAPPING]" + ColorReset)
+			for _, technique := range p.MitreAttack {
+				fmt.Printf("  ▸ %s\n", technique)
+			}
+			fmt.Println()
+		}
+
 		// Legacy fallback support
 		if p.ResurrectedChain != "" {
 			fmt.Println(ColorRed + "[RESURRECTED CHAIN]" + ColorReset)

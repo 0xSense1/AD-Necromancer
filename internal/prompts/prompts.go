@@ -169,7 +169,15 @@ Use: 🟣=abandoned, 🔴=critical, 🟠=high-value, │=connection, ▼=directi
     "Hunt: [Entity type] with [control edge] on [target]"
   ],
   
-  "Mitigation": "Focus on CONTROL EDGE removal and identity lifecycle management"
+  "Mitigation": "Focus on CONTROL EDGE removal and identity lifecycle management",
+  
+  "MitreAttack": [
+    "OPTIONAL: 1-3 MITRE ATT&CK techniques ONLY IF directly applicable",
+    "Format: 'T1484.001' (technique ID only, no descriptions)",
+    "Derive from CONTROL EDGES, not from general attack types",
+    "Examples: T1484.001 (Domain Policy Modification), T1558.003 (Kerberoasting), T1098 (Account Manipulation)",
+    "If no specific techniques apply, OMIT this field entirely"
+  ]
 }
 
 ═══════════════════════════════════════════════════════════════════════════════

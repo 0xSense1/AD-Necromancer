@@ -41,6 +41,9 @@ type ZombiePath struct {
 	EntityStatus string `json:"EntityStatus"` // NEW: e.g., "Abandoned (892 days)"
 	EntityOrigin string `json:"EntityOrigin"` // NEW: e.g., "Decommissioned system"
 
+	// MITRE ATT&CK mapping (1-3 techniques max, output annotation only)
+	MitreAttack []string `json:"MitreAttack,omitempty"` // e.g., ["T1484.001", "T1558.003"]
+
 	// Legacy fields for backward compatibility
 	Description  string   `json:"Description,omitempty"`
 	Command      string   `json:"Command,omitempty"`
