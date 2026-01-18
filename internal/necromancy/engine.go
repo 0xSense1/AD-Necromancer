@@ -7,12 +7,15 @@ import (
 
 	"ad-necromancer/internal/ai"
 	"ad-necromancer/internal/bloodhound"
+	"ad-necromancer/internal/privacy"
 	"ad-necromancer/internal/prompts"
 )
 
 type Engine struct {
-	BHLoader *bloodhound.Loader
-	AIClient ai.AIClient
+	BHLoader     *bloodhound.Loader
+	AIClient     ai.AIClient
+	Tokenizer    *privacy.Tokenizer
+	CloakEnabled bool
 }
 
 type ZombiePath struct {
@@ -65,40 +68,58 @@ func (e *Engine) ResurrectWithSampleSize(maxEntitiesPerType int) ([]ZombiePath, 
 	// - Prioritize high-value targets (admincount=true, highvalue=true)
 	// - Limit to reasonable sizes while maintaining diversity
 
-	snippet := make(map[string]interface{})
+	var dataBytes []byte
+	var err error
 
-	// Sample users intelligently (prioritize high-value)
-	users := sampleNodes(e.BHLoader.Data.Users, maxEntitiesPerType)
-	snippet["users"] = users
+	// If Privacy Cloak is enabled, use sanitized tokenized data
+	if e.CloakEnabled && e.Tokenizer != nil {
+		// Create sanitized, tokenized data structure
+		sanitized := privacy.SanitizeBloodHoundData(&e.BHLoader.Data, e.Tokenizer, maxEntitiesPerType)
 
-	// Sample groups intelligently
-	groups := sampleNodes(e.BHLoader.Data.Groups, maxEntitiesPerType)
-	snippet["groups"] = groups
+		dataBytes, err = json.MarshalIndent(sanitized, "", "  ")
+		if err != nil {
+			return nil, err
+		}
 
-	// Sample computers intelligently
-	computers := sampleNodes(e.BHLoader.Data.Computers, maxEntitiesPerType)
-	snippet["computers"] = computers
+		fmt.Printf("\n[🔒] Privacy Cloak: %d entities tokenized (%d tokens generated)\n",
+			sanitized.Summary.TotalEntities, e.Tokenizer.GetMappingCount())
+	} else {
+		// Original behavior: send raw data
+		snippet := make(map[string]interface{})
 
-	// Include all GPOs (usually small number)
-	snippet["gpos"] = e.BHLoader.Data.GPOs
+		// Sample users intelligently (prioritize high-value)
+		users := sampleNodes(e.BHLoader.Data.Users, maxEntitiesPerType)
+		snippet["users"] = users
 
-	// Include all OUs (usually small number)
-	snippet["ous"] = e.BHLoader.Data.OUs
+		// Sample groups intelligently
+		groups := sampleNodes(e.BHLoader.Data.Groups, maxEntitiesPerType)
+		snippet["groups"] = groups
 
-	// Sample CertTemplates (respects --sample-size flag)
-	certTemplates := sampleNodes(e.BHLoader.Data.CertTemplates, maxEntitiesPerType)
-	snippet["certtemplates"] = certTemplates
+		// Sample computers intelligently
+		computers := sampleNodes(e.BHLoader.Data.Computers, maxEntitiesPerType)
+		snippet["computers"] = computers
 
-	// Sample EnterpriseCAs (respects --sample-size flag)
-	enterpriseCAs := sampleNodes(e.BHLoader.Data.EnterpriseCAs, maxEntitiesPerType)
-	snippet["enterprisecas"] = enterpriseCAs
+		// Include all GPOs (usually small number)
+		snippet["gpos"] = e.BHLoader.Data.GPOs
 
-	fmt.Printf("\n[*] Analysis Scope (Sampled): %d Users, %d Groups, %d Computers, %d CertTemplates, %d EnterpriseCAs\n",
-		len(users), len(groups), len(computers), len(certTemplates), len(enterpriseCAs))
+		// Include all OUs (usually small number)
+		snippet["ous"] = e.BHLoader.Data.OUs
 
-	dataBytes, err := json.MarshalIndent(snippet, "", "  ")
-	if err != nil {
-		return nil, err
+		// Sample CertTemplates (respects --sample-size flag)
+		certTemplates := sampleNodes(e.BHLoader.Data.CertTemplates, maxEntitiesPerType)
+		snippet["certtemplates"] = certTemplates
+
+		// Sample EnterpriseCAs (respects --sample-size flag)
+		enterpriseCAs := sampleNodes(e.BHLoader.Data.EnterpriseCAs, maxEntitiesPerType)
+		snippet["enterprisecas"] = enterpriseCAs
+
+		fmt.Printf("\n[*] Analysis Scope (Sampled): %d Users, %d Groups, %d Computers, %d CertTemplates, %d EnterpriseCAs\n",
+			len(users), len(groups), len(computers), len(certTemplates), len(enterpriseCAs))
+
+		dataBytes, err = json.MarshalIndent(snippet, "", "  ")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 2. Build User Prompt
@@ -153,6 +174,11 @@ Output your findings as a JSON array of ZombiePath objects, SORTED BY RISK (Crit
 	response, err := e.AIClient.Summon(prompts.NecromancerSystemPrompt, userPrompt)
 	if err != nil {
 		return nil, err
+	}
+
+	// 3.5. De-tokenize response if Privacy Cloak was enabled
+	if e.CloakEnabled && e.Tokenizer != nil {
+		response = e.Tokenizer.Detokenize(response)
 	}
 
 	// 4. Parse Response (handling potential markdown code blocks and formatting issues)

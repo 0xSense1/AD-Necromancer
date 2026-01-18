@@ -12,6 +12,7 @@ import (
 	"ad-necromancer/internal/necromancy"
 	"ad-necromancer/internal/ollama"
 	"ad-necromancer/internal/openai"
+	"ad-necromancer/internal/privacy"
 )
 
 // ANSI Color Codes for the "Ritual" theme
@@ -31,11 +32,15 @@ func main() {
 	var sampleSize int
 	var onPremise bool
 	var useOpenAI bool
+	var noPrivacyCloak bool
+	var saveMapping bool
 
 	flag.StringVar(&dataDir, "data", "", "Path to directory containing BloodHound JSON files")
 	flag.IntVar(&sampleSize, "sample-size", 20, "Max entities per type to send to LLM (users, groups, computers)")
 	flag.BoolVar(&onPremise, "on-premise", false, "Use local Ollama backend")
 	flag.BoolVar(&useOpenAI, "openai", false, "Use OpenAI backend")
+	flag.BoolVar(&noPrivacyCloak, "no-privacy-cloak", false, "Disable privacy tokenization (send real data to AI)")
+	flag.BoolVar(&saveMapping, "save-mapping", false, "Save tokenization mapping to disk")
 	flag.Parse()
 
 	printBanner()
@@ -80,6 +85,33 @@ func main() {
 		log.Fatalf(ColorRed+"[!] The connection to the void failed: %v"+ColorReset, err)
 	}
 
+	// 2.5. Initialize Privacy Cloak
+	var tokenizer *privacy.Tokenizer
+	var cloakEnabled bool
+	var runID string
+
+	// Determine if Privacy Cloak should be enabled
+	// Default: ON for remote AI (DeepSeek/OpenAI), OFF for on-premise (Ollama)
+	if noPrivacyCloak {
+		cloakEnabled = false
+	} else if onPremise {
+		cloakEnabled = false // On-premise = data stays local, no need for cloak
+	} else {
+		cloakEnabled = true // Remote AI = enable cloak by default
+	}
+
+	if cloakEnabled {
+		tokenizer = privacy.NewTokenizer()
+		runID = privacy.GenerateRunID()
+		fmt.Println(ColorGreen + "[🔒] Privacy Cloak: ENABLED (tokenized remote AI)" + ColorReset)
+	} else {
+		if onPremise {
+			fmt.Println(ColorCyan + "[*] Privacy Cloak: DISABLED (on-premise AI)" + ColorReset)
+		} else {
+			fmt.Println(ColorYellow + "[!] Privacy Cloak: DISABLED (sending real data to remote AI)" + ColorReset)
+		}
+	}
+
 	// 3. Begin Ritual
 	fmt.Println(ColorPurple + "\n[*] Disturbing dormant identities..." + ColorReset)
 	fmt.Println(ColorPurple + "[*] Listening for forgotten control..." + ColorReset)
@@ -88,6 +120,8 @@ func main() {
 	fmt.Println()
 
 	engine := necromancy.NewEngine(loader, client)
+	engine.Tokenizer = tokenizer
+	engine.CloakEnabled = cloakEnabled
 
 	paths, err := engine.ResurrectWithSampleSize(sampleSize)
 	if err != nil {
