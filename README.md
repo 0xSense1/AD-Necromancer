@@ -14,6 +14,8 @@ An intelligence engine for discovering abandoned and forgotten Active Directory 
 - AI Backend (choose one):
   - **DeepSeek** (default) - [Get API key](https://platform.deepseek.com/)
   - **OpenAI** - [Get API key](https://platform.openai.com/)
+  - **Google Gemini** - [Get API key](https://aistudio.google.com/app/apikey)
+  - **Anthropic Claude** - [Get API key](https://console.anthropic.com/)
   - **Ollama** (on-premise) - [Install Ollama](https://ollama.ai/)
 - BloodHound JSON data
 
@@ -41,7 +43,31 @@ $env:OPENAI_API_KEY="your-api-key-here"
 $env:OPENAI_MODEL="gpt-4o-mini"  # Optional
 ```
 
-#### Option C: Ollama (On-Premise)
+#### Option C: Google Gemini
+
+```bash
+# Linux/macOS
+export GEMINI_API_KEY="your-api-key-here"
+export GEMINI_MODEL="gemini-1.5-flash"  # Optional, defaults to gemini-1.5-flash
+
+# Windows PowerShell
+$env:GEMINI_API_KEY="your-api-key-here"
+$env:GEMINI_MODEL="gemini-1.5-flash"  # Optional
+```
+
+#### Option D: Anthropic Claude
+
+```bash
+# Linux/macOS
+export CLAUDE_API_KEY="your-api-key-here"
+export CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # Optional, defaults to claude-3-5-sonnet
+
+# Windows PowerShell
+$env:CLAUDE_API_KEY="your-api-key-here"
+$env:CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # Optional
+```
+
+#### Option E: Ollama (On-Premise)
 
 ```bash
 # Install Ollama first: https://ollama.ai/
@@ -75,14 +101,24 @@ go build -o ad-necromancer.exe ./cmd/ad-necromancer
 ./ad-necromancer --data /path/to/bloodhound/json
 ```
 
-### With Ollama (On-Premise)
-```bash
-./ad-necromancer --data /path/to/bloodhound/json --on-premise
-```
-
 ### With OpenAI
 ```bash
 ./ad-necromancer --data /path/to/bloodhound/json --openai
+```
+
+### With Google Gemini
+```bash
+./ad-necromancer --data /path/to/bloodhound/json --gemini
+```
+
+### With Anthropic Claude
+```bash
+./ad-necromancer --data /path/to/bloodhound/json --claude
+```
+
+### With Ollama (On-Premise)
+```bash
+./ad-necromancer --data /path/to/bloodhound/json --on-premise
 ```
 
 ### Parameters
@@ -90,6 +126,8 @@ go build -o ad-necromancer.exe ./cmd/ad-necromancer
 - `--data` - Path to directory containing BloodHound JSON files (required)
 - `--on-premise` - Use local Ollama backend (optional)
 - `--openai` - Use OpenAI backend (optional)
+- `--gemini` - Use Google Gemini backend (optional)
+- `--claude` - Use Anthropic Claude backend (optional)
 - `--sample-size` - Max entities per type to send to LLM (default: 20)
   - Controls how many users, groups, computers, cert templates, and enterprise CAs are sampled
   - Lower values = faster analysis, smaller API payload
@@ -98,6 +136,13 @@ go build -o ad-necromancer.exe ./cmd/ad-necromancer
   - Example: `--sample-size 30` sends 30 users, 30 groups, 30 computers, etc.
 - `--no-privacy-cloak` - Disable privacy tokenization (send real data to AI)
 - `--save-mapping` - Save tokenization mapping to disk for debugging
+
+**Backend Priority** (if multiple flags specified):
+1. Ollama (on-premise)
+2. Claude
+3. Gemini
+4. OpenAI
+5. DeepSeek (default)
 
 ### Example
 
