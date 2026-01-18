@@ -299,6 +299,16 @@ func main() {
 
 	fmt.Println(ColorPurple + "    💀 The dead have spoken. Will you listen?" + ColorReset)
 	fmt.Println()
+
+	// 5. Save mapping if requested
+	if saveMapping && cloakEnabled && tokenizer != nil {
+		if err := tokenizer.SaveMapping(runID); err != nil {
+			fmt.Printf(ColorYellow+"[!] Failed to save mapping: %v\n"+ColorReset, err)
+		} else {
+			fmt.Printf(ColorGreen+"[✓] Mapping saved to .necromancer/mappings/run_%s.json\n"+ColorReset, runID)
+			fmt.Println(ColorYellow + "[!] WARNING: Mapping file contains sensitive data. Protect it like credentials." + ColorReset)
+		}
+	}
 }
 
 func printBanner() {
