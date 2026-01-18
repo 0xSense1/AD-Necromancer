@@ -8,7 +8,9 @@ import (
 
 	"ad-necromancer/internal/ai"
 	"ad-necromancer/internal/bloodhound"
+	"ad-necromancer/internal/claude"
 	"ad-necromancer/internal/deepseek"
+	"ad-necromancer/internal/gemini"
 	"ad-necromancer/internal/necromancy"
 	"ad-necromancer/internal/ollama"
 	"ad-necromancer/internal/openai"
@@ -32,6 +34,8 @@ func main() {
 	var sampleSize int
 	var onPremise bool
 	var useOpenAI bool
+	var useGemini bool
+	var useClaude bool
 	var noPrivacyCloak bool
 	var saveMapping bool
 
@@ -39,6 +43,8 @@ func main() {
 	flag.IntVar(&sampleSize, "sample-size", 20, "Max entities per type to send to LLM (users, groups, computers)")
 	flag.BoolVar(&onPremise, "on-premise", false, "Use local Ollama backend")
 	flag.BoolVar(&useOpenAI, "openai", false, "Use OpenAI backend")
+	flag.BoolVar(&useGemini, "gemini", false, "Use Google Gemini backend")
+	flag.BoolVar(&useClaude, "claude", false, "Use Anthropic Claude backend")
 	flag.BoolVar(&noPrivacyCloak, "no-privacy-cloak", false, "Disable privacy tokenization (send real data to AI)")
 	flag.BoolVar(&saveMapping, "save-mapping", false, "Save tokenization mapping to disk")
 	flag.Parse()
@@ -65,14 +71,34 @@ func main() {
 	var err error
 
 	// Check for flag conflicts
-	if onPremise && useOpenAI {
-		fmt.Println(ColorYellow + "[!] Both --on-premise and --openai specified. Using Ollama (on-premise)." + ColorReset)
+	flagCount := 0
+	if onPremise {
+		flagCount++
+	}
+	if useOpenAI {
+		flagCount++
+	}
+	if useGemini {
+		flagCount++
+	}
+	if useClaude {
+		flagCount++
 	}
 
-	// Select backend based on flags
+	if flagCount > 1 {
+		fmt.Println(ColorYellow + "[!] Multiple AI backends specified. Using priority: Ollama > Claude > Gemini > OpenAI > DeepSeek" + ColorReset)
+	}
+
+	// Select backend based on flags (priority order)
 	if onPremise {
 		fmt.Println(ColorCyan + "[*] Using Ollama (on-premise) backend..." + ColorReset)
 		client, err = ollama.NewClient()
+	} else if useClaude {
+		fmt.Println(ColorCyan + "[*] Using Anthropic Claude backend..." + ColorReset)
+		client, err = claude.NewClient()
+	} else if useGemini {
+		fmt.Println(ColorCyan + "[*] Using Google Gemini backend..." + ColorReset)
+		client, err = gemini.NewClient()
 	} else if useOpenAI {
 		fmt.Println(ColorCyan + "[*] Using OpenAI backend..." + ColorReset)
 		client, err = openai.NewClient()
