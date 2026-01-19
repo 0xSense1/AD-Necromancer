@@ -38,6 +38,7 @@ func main() {
 	var useClaude bool
 	var noPrivacyCloak bool
 	var saveMapping bool
+	var debugMode bool
 
 	flag.StringVar(&dataDir, "data", "", "Path to directory containing BloodHound JSON files")
 	flag.IntVar(&sampleSize, "sample-size", 20, "Max entities per type to send to LLM (users, groups, computers)")
@@ -47,6 +48,7 @@ func main() {
 	flag.BoolVar(&useClaude, "claude", false, "Use Anthropic Claude backend")
 	flag.BoolVar(&noPrivacyCloak, "no-privacy-cloak", false, "Disable privacy tokenization (send real data to AI)")
 	flag.BoolVar(&saveMapping, "save-mapping", false, "Save tokenization mapping to disk")
+	flag.BoolVar(&debugMode, "debug", false, "Show actual payload sent to AI (verify Privacy Cloak)")
 	flag.Parse()
 
 	printBanner()
@@ -148,6 +150,7 @@ func main() {
 	engine := necromancy.NewEngine(loader, client)
 	engine.Tokenizer = tokenizer
 	engine.CloakEnabled = cloakEnabled
+	engine.DebugMode = debugMode
 
 	paths, err := engine.ResurrectWithSampleSize(sampleSize)
 	if err != nil {

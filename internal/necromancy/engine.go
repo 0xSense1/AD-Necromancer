@@ -16,6 +16,7 @@ type Engine struct {
 	AIClient     ai.AIClient
 	Tokenizer    *privacy.Tokenizer
 	CloakEnabled bool
+	DebugMode    bool
 }
 
 type ZombiePath struct {
@@ -123,6 +124,25 @@ func (e *Engine) ResurrectWithSampleSize(maxEntitiesPerType int) ([]ZombiePath, 
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// Debug mode: Show actual payload being sent to AI
+	if e.DebugMode {
+		fmt.Println("\n" + strings.Repeat("═", 80))
+		fmt.Println("🔍 DEBUG MODE: Payload Being Sent to AI")
+		fmt.Println(strings.Repeat("═", 80))
+
+		if e.CloakEnabled {
+			fmt.Println("✅ Privacy Cloak: ENABLED - Data below is TOKENIZED")
+			fmt.Println("   (No real names should appear in this payload)")
+		} else {
+			fmt.Println("⚠️  Privacy Cloak: DISABLED - Data below contains REAL NAMES")
+		}
+
+		fmt.Println(strings.Repeat("─", 80))
+		fmt.Println(string(dataBytes))
+		fmt.Println(strings.Repeat("═", 80))
+		fmt.Println()
 	}
 
 	// 2. Build User Prompt
