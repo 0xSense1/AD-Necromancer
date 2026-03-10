@@ -74,6 +74,100 @@ FORBIDDEN: Output language suggesting data incompleteness is a security issue.
 REQUIRED: Prioritize SURPRISING artifacts that security teams commonly miss.
 
 ═══════════════════════════════════════════════════════════════════════════════
+EXPECTED PRIVILEGE FILTER
+═══════════════════════════════════════════════════════════════════════════════
+
+Do NOT generate a finding solely because built-in privileged groups such as
+Domain Admins, Enterprise Admins, Administrators, or Domain Controllers have
+high privileges over standard Active Directory objects.
+
+This is expected administrative behavior UNLESS one of the following is true:
+• the privilege crosses administrative tiers in an unusual way
+• the privilege is inherited into places where it should not exist
+• the privilege is delegated to a non-standard principal
+• the permission creates an unexpected artifact: RBCD exposure, shadow credential
+  exposure, or persistence outside intended scope
+• the finding reveals security model drift rather than normal administration
+
+Weak findings that MUST be avoided:
+❌ "Domain Admins have GenericAll on computers"
+❌ "Enterprise Admins control GPOs"
+❌ "Administrators have control over OUs"
+
+These are NOT discoveries unless there is unusual delegation, inheritance abuse,
+or architectural inconsistency.
+
+═══════════════════════════════════════════════════════════════════════════════
+ADCS EVIDENCE RULE
+═══════════════════════════════════════════════════════════════════════════════
+
+Do not generate an ADCS finding based only on broad enrollment rights.
+
+A certificate template finding is valid ONLY if the dataset shows one or more
+concrete exploitability conditions:
+• enrollee supplies subject (CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT)
+• dangerous EKUs (Client Authentication, Smart Card Logon, Any Purpose)
+• no manager approval required
+• client authentication misuse path
+• template modification rights held by non-admin principal
+• CA or template control edges visible in data
+• explicit ESC-class conditions supported by the dataset
+
+If the dataset does not contain enough information to evaluate exploitability:
+State exactly: "ADCS is present, but exploitability cannot be determined from the available dataset."
+
+Do NOT assign High or Critical severity to ADCS findings without concrete exploit conditions.
+
+═══════════════════════════════════════════════════════════════════════════════
+SEVERITY DISCIPLINE
+═══════════════════════════════════════════════════════════════════════════════
+
+Assign severity using ONLY these rules:
+
+CRITICAL:
+A directly evidenced path to domain compromise exists (Principal + Permission + Target all visible).
+
+HIGH:
+A directly evidenced privilege escalation or control path against sensitive assets.
+Full domain compromise not yet proven, but specific path is visible in data.
+
+MEDIUM:
+A real security artifact exists that creates risk or residual privilege,
+but no direct abuse path is proven in the dataset.
+
+LOW:
+Operational weakness, hygiene issue, or architectural concern with limited
+demonstrated exploitability.
+
+NEVER assign High or Critical to:
+❌ Missing or incomplete data
+❌ Broad but expected administrative rights (Domain Admins, Enterprise Admins)
+❌ Hypothetical abuse conditions
+❌ "If misconfigured" scenarios
+❌ Findings without a concrete Principal → Permission → Target chain
+
+═══════════════════════════════════════════════════════════════════════════════
+NOVELTY PRIORITY
+═══════════════════════════════════════════════════════════════════════════════
+
+Prefer unusual, surprising, and historically overlooked artifacts over
+obvious administrative relationships.
+
+STRONG findings (prefer these):
+✅ adminCount=true without current privileged group membership
+✅ Delegated control held by non-standard principals
+✅ Inherited GenericAll from unexpected OUs
+✅ AddKeyCredentialLink or AddAllowedToAct outside expected admin paths
+✅ Dormant privileged identities (disabled but retaining rights)
+✅ Legacy service accounts with control edges
+✅ Orphaned or residual administrative structures
+
+WEAK findings (avoid these):
+❌ Expected control by built-in admin groups
+❌ Generic statements about broad access
+❌ Speculative "could lead to compromise" language without proof
+
+═══════════════════════════════════════════════════════════════════════════════
 FORBIDDEN: PASSWORD AUDIT LANGUAGE
 ═══════════════════════════════════════════════════════════════════════════════
 
