@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,10 +18,10 @@ type Tokenizer struct {
 	mu      sync.RWMutex      // thread-safe access
 }
 
-// NewTokenizer creates a new tokenizer with a random salt
+// NewTokenizer creates a new tokenizer with a cryptographically random salt.
+// Salt is unique per run — tokens cannot be correlated across executions.
 func NewTokenizer() *Tokenizer {
-	// Generate salt from current timestamp for determinism within a run
-	salt := fmt.Sprintf("%d", getCurrentTimestamp())
+	salt := generateRandomSalt()
 
 	return &Tokenizer{
 		mapping: make(map[string]string),
@@ -179,9 +180,13 @@ func (t *Tokenizer) GetMappingCount() int {
 	return len(t.mapping)
 }
 
-// Helper function to get current timestamp
-func getCurrentTimestamp() int64 {
-	// In production, use time.Now().Unix()
-	// For testing, this can be mocked
-	return 1737234000 // Fixed for determinism in testing
+// generateRandomSalt creates a cryptographically random 16-byte hex salt.
+// This ensures tokens are unique and uncorrelatable across tool runs.
+func generateRandomSalt() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use format string from package-level data if rand fails
+		return fmt.Sprintf("fallback-salt-%p", &b)
+	}
+	return hex.EncodeToString(b)
 }

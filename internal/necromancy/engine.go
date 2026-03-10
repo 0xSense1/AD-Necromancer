@@ -3,6 +3,7 @@ package necromancy
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"ad-necromancer/internal/ai"
@@ -325,12 +326,38 @@ func sampleNodes(nodes []bloodhound.Node, maxCount int) []bloodhound.Node {
 	return result
 }
 
-// fixLLMJson attempts to fix common JSON formatting issues from LLMs
+// fixLLMJson attempts to fix common JSON formatting issues produced by LLMs.
+// Handles: trailing commas, truncated arrays, JS-style comments.
 func fixLLMJson(jsonStr string) string {
-	// This is a simple approach - just return as-is for now
-	// The prompt instructions should prevent most issues
-	// If needed, we can add more sophisticated cleaning later
-	return jsonStr
+	if jsonStr == "" {
+		return jsonStr
+	}
+
+	result := jsonStr
+
+	// 1. Remove JavaScript-style // comments (LLMs sometimes insert these)
+	commentRe := regexp.MustCompile(`(?m)//[^\n]*$`)
+	result = commentRe.ReplaceAllString(result, "")
+
+	// 2. Fix trailing commas before } or ] — invalid in JSON but common in LLM output
+	// e.g.  "foo": "bar",   }  →  "foo": "bar"   }
+	trailingCommaRe := regexp.MustCompile(`,\s*([}\]])`)
+	result = trailingCommaRe.ReplaceAllString(result, "$1")
+
+	// 3. If the JSON is truncated (array not closed), attempt to close it
+	// Count unmatched [ vs ] to determine if we need to append ]
+	result = strings.TrimSpace(result)
+	if strings.HasPrefix(result, "[") && !strings.HasSuffix(result, "]") {
+		// Remove any trailing incomplete object fragment after the last complete },
+		lastClose := strings.LastIndex(result, "}")
+		if lastClose > 0 {
+			result = result[:lastClose+1] + "]"
+		} else {
+			result = result + "]"
+		}
+	}
+
+	return result
 }
 
 // truncate returns a truncated version of the string if it exceeds maxLen
