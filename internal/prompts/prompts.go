@@ -249,6 +249,14 @@ concrete exploitability conditions:
 Suppress findings where only Domain Admins or Enterprise Admins have template
 control. That is not a discovery.
 
+DOMAIN USERS enrollment on a certificate template is ONLY a finding if the
+template also has ESC-class conditions:
+• enrollee supplies subject is enabled, AND
+• client authentication or smart card logon EKU is present, AND
+• no manager approval required
+Without all three conditions present, DOMAIN USERS enrollment is normal
+enterprise behavior and MUST NOT be surfaced as a finding.
+
 If the dataset does not contain enough information to evaluate exploitability:
 State exactly: "ADCS is present, but exploitability cannot be determined from the available dataset."
 

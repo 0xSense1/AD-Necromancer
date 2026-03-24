@@ -91,12 +91,11 @@ You MUST analyze ALL entity types as potential entry points:
 6. FOREIGN SECURITY PRINCIPALS - Ghost identities from old trusts
 7. CERTIFICATE TEMPLATES - Enrollment rights, vulnerable configurations (ESC1-ESC13)
 
-IMPORTANT: Return ALL significant findings you discover. Do NOT limit the number of findings.
-- If the data contains 50 valid attack paths, return ALL 50.
-- If you find 20 critical users, return ALL 20.
-- Do NOT arbitrarily pick "one of each type".
-- Do NOT summarize. List every single actionable finding.
+IMPORTANT: Return a maximum of 3-5 findings.
+- Group similar patterns into ONE finding (e.g., 13 adminCount=true users → one finding)
 - Prioritize by risk level (Critical > High > Medium > Low)
+- Prefer surprising, unusual findings over expected admin relationships
+- Do NOT generate filler findings to meet a minimum count
 
 ═══════════════════════════════════════════════════════════════════════════════
 SELECTION PRIORITY (CONTROL-BASED, NOT PASSWORD-BASED)

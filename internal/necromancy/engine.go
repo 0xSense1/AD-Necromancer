@@ -172,7 +172,8 @@ Requirements:
 - Use ACTUAL data from the JSON below (real SIDs, usernames, properties)
 - NEVER describe Domain Admins or Enterprise Admins as "non-standard" or "unusual"
 - Prefer surprising delegated control by unusual principals over expected admin relationships
-- Provide COMPLETE exploit chains with copy-paste ready commands
+- Describe the EXACT capability each permission edge provides — do not infer stronger rights
+- Do NOT mix attack families within a single finding
 - Include DETECTION rules for each attack (Splunk/Sentinel/CrowdStrike)
 - Assign JUSTIFIED risk scores (Critical/High/Medium/Low)
 

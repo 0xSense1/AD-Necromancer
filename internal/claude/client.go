@@ -66,7 +66,7 @@ func (c *Client) Summon(systemPrompt, userPrompt string) (string, error) {
 		Messages: []Message{
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0.7,
+		Temperature: 0.3,
 	}
 
 	jsonData, err := json.Marshal(reqBody)

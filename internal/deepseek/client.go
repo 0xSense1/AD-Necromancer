@@ -60,7 +60,7 @@ func (c *Client) Summon(systemPrompt, userPrompt string) (string, error) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0.7,  // High creativity for "mutations"
+		Temperature: 0.3,  // Low temperature for strict rule compliance
 		MaxTokens:   8000, // Increased to prevent truncation
 	}
 
