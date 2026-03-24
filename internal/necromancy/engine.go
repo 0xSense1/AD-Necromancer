@@ -222,6 +222,16 @@ Output your findings as a JSON array of ZombiePath objects, SORTED BY RISK (Crit
 		return nil, fmt.Errorf("failed to parse LLM response as JSON: %w", err)
 	}
 
+	// Post-process: convert literal "\n" strings to actual newlines in text fields
+	// LLMs output \\n in JSON which gets parsed as the two-char string \n, not a real newline
+	for i := range paths {
+		paths[i].VisualPath = strings.ReplaceAll(paths[i].VisualPath, `\n`, "\n")
+		paths[i].ResurrectedChain = strings.ReplaceAll(paths[i].ResurrectedChain, `\n`, "\n")
+		paths[i].Reasoning = strings.ReplaceAll(paths[i].Reasoning, `\n`, "\n")
+		paths[i].WhyThisExists = strings.ReplaceAll(paths[i].WhyThisExists, `\n`, "\n")
+		paths[i].Mitigation = strings.ReplaceAll(paths[i].Mitigation, `\n`, "\n")
+	}
+
 	// Sort paths by risk level (Critical > High > Medium > Low)
 	sortByRisk(paths)
 
