@@ -91,6 +91,18 @@ These groups may appear only when:
 - their rights combine with a non-standard principal or delegated path
 - the real novelty is cross-tier spread, inheritance drift, or derivative control
 
+NOTE: The following are NOT AdminSDHolder groups and must NEVER be described as such:
+- DOMAIN USERS
+- AUTHENTICATED USERS
+- EVERYONE
+- CERT PUBLISHERS
+- DOMAIN COMPUTERS
+
+These are standard AD groups. Do NOT call them AdminSDHolder groups.
+Do NOT group them together with AdminSDHolder artifacts.
+If DOMAIN USERS has unusual ACL rights, treat that as a separate finding type:
+delegation anomaly or inherited overreach — NOT AdminSDHolder.
+
 2. Missing data is not a finding
 Do NOT create findings solely because:
 - relationships are missing
@@ -112,6 +124,12 @@ If the dataset does not prove the abuse condition, say so directly.
 4. No repetition
 Group similar artifacts into one finding.
 Do not print multiple findings that say the same thing with different objects.
+
+5. Finding diversity
+Do NOT produce more than 2 findings from the same artifact category.
+If 3 or more findings are all AdminSDHolder orphans, replace the weakest with a
+different finding type (delegation abuse, PKI anomaly, GPO control, RBCD, etc.).
+The scan output must demonstrate range across artifact types.
 
 ===============================================================================
 FINDING DECISION TEST
@@ -186,6 +204,12 @@ AddKeyCredentialLink proves ability to modify key credential material on the tar
 Do NOT describe it as unrestricted takeover.
 Do NOT say it works without first controlling a principal that holds the right, unless the dataset proves otherwise.
 
+FORBIDDEN phrases for AddKeyCredentialLink findings:
+- "Account Takeover"
+- "unrestricted takeover"
+- "full compromise"
+USE INSTEAD: "Shadow Credential Injection Setup" or "Key Credential Modification Capability"
+
 5. Rights semantics must be exact
 Only describe the exact capability supported by the observed edge.
 
@@ -202,6 +226,18 @@ In particular:
 - AllExtendedRights is NOT automatically equivalent to GenericWrite, WriteProperty, WriteDacl, or WriteOwner
 - GPO ownership / write rights do NOT automatically mean full domain compromise unless GPO scope supports that claim
 - CA control does NOT automatically mean unrestricted template modification unless the specific control path supports it
+
+FORBIDDEN phrases for AllExtendedRights findings:
+- "may enable template modification"
+- "enables various abuse techniques"
+- "multiple abuse vectors"
+USE INSTEAD: "sensitive extended rights delegation (enroll, autoenroll) requiring validation"
+
+FORBIDDEN phrases for GPO findings:
+- "Domain-wide Impact" (unless you KNOW the GPO is linked to the domain root)
+- "full domain compromise via GPO"
+USE INSTEAD: "GPO modification capability — impact depends on GPO linkage scope"
+If GPO linkage is not shown in the dataset, state that explicitly.
 
 6. No concept mixing
 Do NOT mix different attack families in one finding.
@@ -244,6 +280,12 @@ Do NOT generate PKI findings based only on:
 
 If exploitability is not fully proven, say:
 "PKI control anomaly identified, but direct exploitability is not fully proven from the available dataset."
+
+SEVERITY OVERRIDE FOR DOMAIN USERS WITH TEMPLATE CONTROL:
+If DOMAIN USERS or AUTHENTICATED USERS has WritePKINameFlag, WritePKIEnrollmentFlag,
+WriteDacl, WriteOwner, or GenericWrite on ANY certificate template, this is
+automatically Critical severity. Every user in the domain can modify the template.
+Do NOT rate this as Medium.
 
 For AllExtendedRights on templates:
 describe it as sensitive PKI control delegation requiring validation.
