@@ -11,7 +11,7 @@ import (
 
 const (
 	apiEndpoint  = "https://api.anthropic.com/v1/messages"
-	defaultModel = "claude-3-5-sonnet-20241022"
+	defaultModel = "claude-sonnet-4-20250514"
 	apiVersion   = "2023-06-01"
 )
 
