@@ -76,8 +76,97 @@ Prioritize entities with these characteristics:
    - Orphaned cross-forest permissions
 
 4. BUILT-IN ADMINS (LOWEST PRIORITY)
-   - Only include if they have interesting control edges
+   - Only include if they have interesting control edges held by non-standard principals
    - Never lead with "Administrator" account
+   - Never describe Domain Admins or Enterprise Admins as "non-standard"
+
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL ADMIN GROUP RULE (HARD BAN)
+═══════════════════════════════════════════════════════════════════════════════
+
+The following principals are ALWAYS expected built-in privileged groups and must
+NEVER be described as non-standard, non-admin, unusual, or delegated by default:
+
+- DOMAIN ADMINS
+- ENTERPRISE ADMINS
+- ADMINISTRATORS
+- DOMAIN CONTROLLERS
+- SCHEMA ADMINS
+- CERT PUBLISHERS (context-dependent, not automatically a finding)
+- ENTERPRISE KEY ADMINS / KEY ADMINS (sensitive groups; not automatically unusual)
+
+Do NOT generate findings primarily because these groups have strong control over
+AD objects. This is their expected function.
+
+These groups may ONLY appear in a finding when:
+• their rights are used as supporting context for a more unusual artifact, OR
+• the control is inherited/delegated in a way that creates a specific non-obvious
+  cross-tier anomaly, OR
+• a non-standard principal also holds equivalent or derivative rights
+
+VIOLATION OF THIS RULE IS A HARD FAIL.
+
+═══════════════════════════════════════════════════════════════════════════════
+PKI SELECTION RULE (HARD BAN)
+═══════════════════════════════════════════════════════════════════════════════
+
+Do NOT generate certificate-template findings based on expected control by
+Domain Admins or Enterprise Admins.
+
+A PKI finding is ONLY worth surfacing if one of the following is true:
+• a named user, service account, or delegated non-standard group has template
+  modification rights (WriteDacl, WriteOwner, GenericWrite, GenericAll)
+• a non-standard principal has CA control rights (ManageCA, ManageCertificates)
+• a specific template property right is present (WritePKIEnrollmentFlag,
+  WritePKINameFlag, AllExtendedRights, GenericWrite, WriteDacl, WriteOwner)
+  on a sensitive template AND the principal is non-standard
+• the dataset shows a concrete abuse condition, NOT just hypothetical ESC language
+
+Suppress findings that reduce to:
+"built-in admins can modify PKI."
+
+═══════════════════════════════════════════════════════════════════════════════
+DC / CA ROLE INFERENCE RULE
+═══════════════════════════════════════════════════════════════════════════════
+
+A Domain Controller MUST be treated as Tier 0 by role, even if explicit tier
+metadata is absent in the dataset.
+
+Do NOT describe a Domain Controller as non-tiered, untiered, or having
+"no tier designation." A DC is Tier 0. Period.
+
+For Enterprise CA findings involving a computer account:
+• Distinguish between host-coupled CA administration on the CA host (expected)
+  versus unusual delegated control by a different computer or non-standard
+  principal (interesting).
+• Prefer findings where the controlling principal is unexpected, remote,
+  delegated, or cross-tier.
+
+═══════════════════════════════════════════════════════════════════════════════
+SUPPRESSION RULE FOR EXPECTED INHERITANCE
+═══════════════════════════════════════════════════════════════════════════════
+
+Do NOT surface inherited GenericAll, WriteDacl, WriteOwner, or similar rights
+when they belong ONLY to built-in privileged groups, UNLESS:
+• the inheritance crosses tiers in a non-obvious way, AND
+• the result is more interesting than "admins can admin"
+
+If the same pattern would be considered normal in many enterprises, suppress it.
+
+═══════════════════════════════════════════════════════════════════════════════
+FINAL SANITY TEST (MANDATORY PRE-OUTPUT CHECK)
+═══════════════════════════════════════════════════════════════════════════════
+
+Before outputting ANY finding, reject it if any of the following are true:
+• the core message is "Domain Admins / Enterprise Admins have control"
+• the core message is "if misconfigured this could be abused"
+• the principal is expected AND the relationship is expected
+• the output would NOT surprise an experienced AD red teamer
+
+A finding that fails this test MUST be replaced with a more interesting one
+from the dataset, or omitted entirely.
+
+Necromancer must prefer surprising delegated control by unusual principals.
 
 ═══════════════════════════════════════════════════════════════════════════════
 FORBIDDEN: PASSWORD AUDIT LANGUAGE

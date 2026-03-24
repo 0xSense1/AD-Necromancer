@@ -161,18 +161,19 @@ Your mission: Discover FORGOTTEN CONTROL PATHS that humans have lost track of.
 
 Focus on:
 1. ABANDONED IDENTITIES (orphaned service accounts, test users, forgotten admins)
-2. FORGOTTEN CONTROL EDGES (WriteDACL, GenericAll, AddMember on critical objects)
-3. CERTIFICATE TEMPLATE ABUSE (ESC1-ESC13 attacks, enrollment rights)
+2. FORGOTTEN CONTROL EDGES (WriteDACL, GenericAll, AddMember on critical objects BY NON-STANDARD PRINCIPALS)
+3. CERTIFICATE TEMPLATE ABUSE (only when non-standard principals have template rights — NOT when DA/EA have expected control)
 4. SID HISTORY EXPLOITATION (orphaned SIDs from old trusts/migrations)
 5. LATERAL MOVEMENT OPPORTUNITIES (local admin rights, session hijacking)
 6. PRIVILEGE ESCALATION PATHS (combining weak permissions into DA)
-7. GPO ABUSE (weak GPO permissions, GPO-based persistence)
+7. GPO ABUSE (weak GPO permissions by non-standard principals)
 
 Requirements:
 - Use ACTUAL data from the JSON below (real SIDs, usernames, properties)
+- NEVER describe Domain Admins or Enterprise Admins as "non-standard" or "unusual"
+- Prefer surprising delegated control by unusual principals over expected admin relationships
 - Provide COMPLETE exploit chains with copy-paste ready commands
 - Include DETECTION rules for each attack (Splunk/Sentinel/CrowdStrike)
-- Be CREATIVE with mutations (what-if scenarios)
 - Assign JUSTIFIED risk scores (Critical/High/Medium/Low)
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -185,7 +186,7 @@ BLOODHOUND DATA (JSON)
 BEGIN RESURRECTION ANALYSIS
 ═══════════════════════════════════════════════════════════════════════════════
 
-Output your findings as a JSON array of ZombiePath objects, SORTED BY RISK (Critical/High first). Be thorough, technical, and creative.`,
+Output your findings as a JSON array of ZombiePath objects, SORTED BY RISK (Critical/High first). Focus on non-obvious, forgotten artifacts — not expected admin relationships.`,
 		len(e.BHLoader.Data.Users),
 		len(e.BHLoader.Data.Groups),
 		len(e.BHLoader.Data.Computers),
