@@ -34,6 +34,7 @@ type ZombiePath struct {
 	WhyThisExists     string   `json:"WhyThisExists"`    // NEW: Root cause
 	Probability       string   `json:"Probability"`
 	RiskJustification string   `json:"RiskJustification"`
+	Confidence        string   `json:"Confidence,omitempty"` // HIGH/MEDIUM/LOW CONFIDENCE
 	DetectionRules    []string `json:"DetectionRules"`
 	Mitigation        string   `json:"Mitigation"`
 

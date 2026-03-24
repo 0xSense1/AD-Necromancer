@@ -208,15 +208,26 @@ func main() {
 			fmt.Println()
 		}
 
-		// [NECROMANCY ANALYSIS] Section
+		// [SECURITY INTERPRETATION] Section
 		if p.Reasoning != "" {
-			fmt.Println(ColorCyan + "[NECROMANCY ANALYSIS]" + ColorReset)
+			fmt.Println(ColorCyan + "[SECURITY INTERPRETATION]" + ColorReset)
 			// Split reasoning into bullet points if it contains multiple sentences
 			reasoningLines := splitIntoBullets(p.Reasoning)
 			for _, line := range reasoningLines {
 				fmt.Printf("  ▸ %s\n", line)
 			}
 			fmt.Println()
+		}
+
+		// [CONFIDENCE] Section
+		if p.Confidence != "" {
+			confidenceColor := ColorGreen
+			if strings.Contains(p.Confidence, "HIGH") {
+				confidenceColor = ColorRed
+			} else if strings.Contains(p.Confidence, "MEDIUM") {
+				confidenceColor = ColorYellow
+			}
+			fmt.Printf(ColorCyan+"[CONFIDENCE]"+ColorReset+" %s%s%s\n\n", confidenceColor, p.Confidence, ColorReset)
 		}
 
 		// [UNDEAD CONTROL PATH] Section - Visual Graph
