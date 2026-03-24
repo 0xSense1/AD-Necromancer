@@ -148,47 +148,17 @@ func (e *Engine) ResurrectWithSampleSize(maxEntitiesPerType int) ([]ZombiePath, 
 	}
 
 	// 2. Build User Prompt
-	userPrompt := fmt.Sprintf(`You are analyzing BloodHound data for an Active Directory environment.
+	userPrompt := fmt.Sprintf(`### ENVIRONMENT SNAPSHOT
+- Users: %d, Groups: %d, Computers: %d, Domains: %d, GPOs: %d, OUs: %d
 
-ENVIRONMENT SNAPSHOT:
-- %d Users
-- %d Groups  
-- %d Computers
-- %d Domains
-- %d GPOs
-- %d OUs
-
-Your mission: Discover FORGOTTEN CONTROL PATHS that humans have lost track of.
-
-Focus on:
-1. ABANDONED IDENTITIES (orphaned service accounts, test users, forgotten admins)
-2. FORGOTTEN CONTROL EDGES (WriteDACL, GenericAll, AddMember on critical objects BY NON-STANDARD PRINCIPALS)
-3. CERTIFICATE TEMPLATE ABUSE (only when non-standard principals have template rights — NOT when DA/EA have expected control)
-4. SID HISTORY EXPLOITATION (orphaned SIDs from old trusts/migrations)
-5. LATERAL MOVEMENT OPPORTUNITIES (local admin rights, session hijacking)
-6. PRIVILEGE ESCALATION PATHS (combining weak permissions into DA)
-7. GPO ABUSE (weak GPO permissions by non-standard principals)
-
-Requirements:
-- Use ACTUAL data from the JSON below (real SIDs, usernames, properties)
-- NEVER describe Domain Admins or Enterprise Admins as "non-standard" or "unusual"
-- Prefer surprising delegated control by unusual principals over expected admin relationships
-- Describe the EXACT capability each permission edge provides — do not infer stronger rights
-- Do NOT mix attack families within a single finding
-- Include DETECTION rules for each attack (Splunk/Sentinel/CrowdStrike)
-- Assign JUSTIFIED risk scores (Critical/High/Medium/Low)
-
-═══════════════════════════════════════════════════════════════════════════════
-BLOODHOUND DATA (JSON)
-═══════════════════════════════════════════════════════════════════════════════
-
+### BLOODHOUND DATA (JSON)
 %s
 
-═══════════════════════════════════════════════════════════════════════════════
-BEGIN RESURRECTION ANALYSIS
-═══════════════════════════════════════════════════════════════════════════════
-
-Output your findings as a JSON array of ZombiePath objects, SORTED BY RISK (Critical/High first). Focus on non-obvious, forgotten artifacts — not expected admin relationships.`,
+### INSTRUCTION
+Perform privilege archaeology on the provided BloodHound dataset. 
+Discover forgotten control paths and identify non-obvious attack artifacts.
+Strictly follow all Necromancer Technical Precision and Exclusion rules.
+Output the analysis as a JSON array of ZombiePath objects, sorted by risk.`,
 		len(e.BHLoader.Data.Users),
 		len(e.BHLoader.Data.Groups),
 		len(e.BHLoader.Data.Computers),
