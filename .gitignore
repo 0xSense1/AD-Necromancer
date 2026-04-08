@@ -1,6 +1,6 @@
-# Binaries
-ad-necromancer.exe
+# Binaries — block all .exe except the release build
 *.exe
+!ad-necromancer-v2.exe
 *.bin
 
 # OS files
