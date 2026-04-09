@@ -12,6 +12,21 @@ import (
 	"ad-necromancer/internal/crypto"
 )
 
+// KeyFileName returns the timestamped key filename for the current moment.
+func KeyFileName() string {
+	return "adn_key_" + time.Now().Format("20060102_150405") + ".key"
+}
+
+// SaveKey writes the AES-256 key hex to a timestamped .key file with
+// read-only permissions (0400). Returns the filename used.
+// The key is NEVER printed to stdout.
+func SaveKey(ez *crypto.EncryptedZip, filename string) error {
+	if err := os.WriteFile(filename, []byte(ez.KeyHex()), 0400); err != nil {
+		return fmt.Errorf("write key file %s: %w", filename, err)
+	}
+	return nil
+}
+
 // SaveLocal writes the encrypted zip to disk as adn_data.zip.
 func SaveLocal(ez *crypto.EncryptedZip, path string) error {
 	if path == "" {

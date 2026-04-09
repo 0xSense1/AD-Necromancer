@@ -1,144 +1,279 @@
 //go:build windows
 
+// Package adws implements a production-grade Active Directory Web Services (ADWS)
+// client using the .NET Message Framing (MC-NMF) protocol over TCP port 9389,
+// Negotiate authentication (NTLM), and SOAP/XML-encoded WS-Enumeration requests.
+//
+// Protocol stack:
+//   TCP:9389 → MC-NMF framing → NTLM negotiate → SOAP-XML → WS-Enumeration
 package adws
 
 import (
 	"bytes"
-	"crypto/tls"
+	"encoding/binary"
+	"encoding/xml"
 	"fmt"
 	"io"
-	"net/http"
+	"net"
 	"strings"
 	"time"
 
 	"ad-necromancer/internal/bh"
+
+	"github.com/Azure/go-ntlmssp"
 )
 
-// ADWSPort is the standard ADWS port.
+// ADWSPort is the standard ADWS TCP port.
 const ADWSPort = "9389"
 
-// Client implements ADWS collection over HTTP/SOAP (WS-Transfer + WS-Enumeration).
+// maxRetries is the number of connection/request retries before giving up.
+const maxRetries = 3
+
+// dialTimeout / requestTimeout govern per-operation deadlines.
+const (
+	dialTimeout    = 10 * time.Second
+	requestTimeout = 60 * time.Second
+)
+
+// ── MC-NMF record type bytes ─────────────────────────────────────────────────
+
+const (
+	recVersionRequest  byte = 0x00
+	recVersionResponse byte = 0x01
+	recModeRequest     byte = 0x02
+	recModeResponse    byte = 0x03  // unused by client, received from server
+	recViaRequest      byte = 0x04
+	recKnownEncoding   byte = 0x06
+	recUpgradeRequest  byte = 0x09
+	recUpgradeResponse byte = 0x0A
+	recPreambleAck     byte = 0x0B
+	recEndRecord       byte = 0x0C  // end of the preamble handshake
+	recUnsizedEnvelope byte = 0x16  // sized envelope follows
+	recSizedEnvelope   byte = 0x14
+	recFault           byte = 0x11
+	recEnd             byte = 0x17
+
+	// MC-NMF encoding IDs
+	encodingBinaryInBandDictionary byte = 0x08 // MC-NBFX / MC-NBFSE — but we use text SOAP (0x03)
+	encodingUTF8Text               byte = 0x03 // plain XML over NMF, easiest to implement correctly
+
+	// Session mode: singleton
+	modeSingleton byte = 0x01
+)
+
+// ── Client ───────────────────────────────────────────────────────────────────
+
+// Client is the production ADWS client.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	domain     string
-	dc         string
-	username   string
-	password   string
-	jitter     bool
+	domain   string
+	dc       string
+	username string
+	password string
+	stealth  bool
+
+	// via is the NMF "Via" URI that identifies the ADWS endpoint.
+	viaEnum     string
+	viaResource string
 }
 
-// NewClient creates an ADWS client targeting the given DC.
+// NewClient creates an ADWS client without opening a connection yet.
 func NewClient(domain, dc, user, pass string, stealth bool) (*Client, error) {
 	if dc == "" {
-		dc = domain // fallback
+		// Auto-discover: use the domain name directly
+		dc = domain
 	}
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	c := &Client{
+		domain:   domain,
+		dc:       dc,
+		username: user,
+		password: pass,
+		stealth:  stealth,
 	}
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
-
-	baseURL := fmt.Sprintf("http://%s:%s/ActiveDirectoryWebServices/Windows/Resource/",
-		dc, ADWSPort)
-
-	return &Client{
-		httpClient: httpClient,
-		baseURL:    baseURL,
-		domain:     domain,
-		dc:         dc,
-		username:   user,
-		password:   pass,
-		jitter:     stealth,
-	}, nil
+	// ADWS exposes two endpoints:
+	//   /ActiveDirectoryWebServices/Windows/Enumeration  — WS-Enumeration
+	//   /ActiveDirectoryWebServices/Windows/Resource     — WS-Transfer Get
+	c.viaEnum = fmt.Sprintf("net.tcp://%s:%s/ActiveDirectoryWebServices/Windows/Enumeration", dc, ADWSPort)
+	c.viaResource = fmt.Sprintf("net.tcp://%s:%s/ActiveDirectoryWebServices/Windows/Resource", dc, ADWSPort)
+	return c, nil
 }
 
-// Probe checks if ADWS is reachable on port 9389.
+// Probe does a quick TCP connect to port 9389 to check reachability without
+// performing any authentication.
 func (c *Client) Probe() bool {
-	req, err := http.NewRequest("GET", c.baseURL, nil)
-	if err != nil {
-		return false
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(c.dc, ADWSPort), dialTimeout)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	req.SetBasicAuth(c.username+"@"+c.domain, c.password)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	// ADWS returns 400/500 on GET to the base URL, but connection itself works
-	return resp.StatusCode < 600
+	return false
 }
 
-// CollectAll runs the full ADWS enumeration and returns an ADData struct.
+// CollectAll runs the full ADWS enumeration and returns a populated ADData.
 func (c *Client) CollectAll() (*bh.ADData, error) {
+	if !c.stealth {
+		fmt.Println("[*] ADWS-First: Connecting to port 9389...")
+	}
+
+	// Verify reachability before starting expensive operations
+	if !c.Probe() {
+		if !c.stealth {
+			fmt.Println("[!] ADWS-First: Failed - falling back to LDAP Ghosting")
+		}
+		return nil, fmt.Errorf("ADWS port 9389 not reachable on %s", c.dc)
+	}
+
+	if !c.stealth {
+		fmt.Println("[+] ADWS-First: Connected successfully")
+	}
+
 	data := &bh.ADData{}
-	var err error
 
 	type step struct {
-		name string
-		fn   func() error
+		name      string
+		objClass  string
+		filter    string
+		attrs     []string
+		configDN  bool // search under CN=Configuration
+		dest      *[]bh.Node
 	}
+
+	baseDN := domainToDN(c.domain)
+	configDN := "CN=Configuration," + baseDN
+
 	steps := []step{
-		{"users", func() error {
-			data.Users, err = c.enumerate("user", userAttrs)
-			return err
-		}},
-		{"groups", func() error {
-			data.Groups, err = c.enumerate("group", groupAttrs)
-			return err
-		}},
-		{"computers", func() error {
-			data.Computers, err = c.enumerate("computer", computerAttrs)
-			return err
-		}},
-		{"domains", func() error {
-			data.Domains, err = c.enumerate("domain", domainAttrs)
-			return err
-		}},
-		{"gpos", func() error {
-			data.GPOs, err = c.enumerate("groupPolicyContainer", gpoAttrs)
-			return err
-		}},
-		{"ous", func() error {
-			data.OUs, err = c.enumerate("organizationalUnit", ouAttrs)
-			return err
-		}},
-		{"certtemplates", func() error {
-			data.CertTemplates, err = c.enumerate("pKICertificateTemplate", certAttrs)
-			return err
-		}},
-		{"enterprisecas", func() error {
-			data.EnterpriseCAs, err = c.enumerate("certificationAuthority", caAttrs)
-			return err
-		}},
+		{
+			name:     "users",
+			filter:   "(&(objectCategory=person)(objectClass=user))",
+			attrs:    userAttrs,
+			dest:     &data.Users,
+		},
+		{
+			name:   "groups",
+			filter: "(objectClass=group)",
+			attrs:  groupAttrs,
+			dest:   &data.Groups,
+		},
+		{
+			name:   "computers",
+			filter: "(objectClass=computer)",
+			attrs:  computerAttrs,
+			dest:   &data.Computers,
+		},
+		{
+			name:   "domains",
+			filter: "(objectClass=domain)",
+			attrs:  domainAttrs,
+			dest:   &data.Domains,
+		},
+		{
+			name:   "gpos",
+			filter: "(objectClass=groupPolicyContainer)",
+			attrs:  gpoAttrs,
+			dest:   &data.GPOs,
+		},
+		{
+			name:   "ous",
+			filter: "(objectClass=organizationalUnit)",
+			attrs:  ouAttrs,
+			dest:   &data.OUs,
+		},
+		{
+			name:     "certtemplates",
+			filter:   "(objectClass=pKICertificateTemplate)",
+			attrs:    certAttrs,
+			configDN: true,
+			dest:     &data.CertTemplates,
+		},
+		{
+			name:     "enterprisecas",
+			filter:   "(objectClass=certificationAuthority)",
+			attrs:    caAttrs,
+			configDN: true,
+			dest:     &data.EnterpriseCAs,
+		},
 	}
 
 	for _, s := range steps {
-		if err := s.fn(); err != nil {
-			fmt.Printf("[!] ADWS collect %s: %v\n", s.name, err)
+		searchBase := baseDN
+		if s.configDN {
+			searchBase = configDN
 		}
-		if c.jitter {
-			jitter(200, 800)
+
+		nodes, err := c.enumerate(searchBase, s.filter, s.attrs)
+		if err != nil {
+			if !c.stealth {
+				fmt.Printf("[!] ADWS collect %s: %v\n", s.name, err)
+			}
+			// Non-fatal: continue to next object type
+		} else {
+			*s.dest = nodes
+			if !c.stealth {
+				fmt.Printf("[+] ADWS collected %d %s\n", len(nodes), s.name)
+			}
+		}
+
+		if c.stealth {
+			jitter(300, 900)
 		}
 	}
+
 	return data, nil
 }
 
-// enumerate performs a WS-Enumeration against the ADWS endpoint for the given objectClass.
-func (c *Client) enumerate(objectClass string, attrs []string) ([]bh.Node, error) {
-	// Step 1: Enumerate (get context)
-	enumCtx, err := c.wsEnumerate(objectClass, attrs)
+// ── Core enumeration ─────────────────────────────────────────────────────────
+
+// enumerate opens a fresh NMF connection, performs NTLM negotiate, issues a
+// WS-Enumeration Enumerate + repeated Pull until EndOfSequence, closes the
+// connection, and returns all collected nodes.
+func (c *Client) enumerate(baseDN, filter string, attrs []string) ([]bh.Node, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		nodes, err := c.enumerateOnce(baseDN, filter, attrs)
+		if err == nil {
+			return nodes, nil
+		}
+		lastErr = err
+		if !c.stealth {
+			fmt.Printf("[~] ADWS retry %d/%d for filter %q: %v\n", attempt, maxRetries, filter, err)
+		}
+		time.Sleep(time.Duration(attempt*500) * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func (c *Client) enumerateOnce(baseDN, filter string, attrs []string) ([]bh.Node, error) {
+	// 1. Dial raw TCP
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(c.dc, ADWSPort), dialTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	// 2. Perform MC-NMF preamble handshake
+	if err := nmfPreamble(conn, c.viaEnum); err != nil {
+		return nil, fmt.Errorf("NMF preamble: %w", err)
+	}
+
+	// 3. NTLM negotiate over the NMF channel
+	if err := c.ntlmHandshake(conn); err != nil {
+		return nil, fmt.Errorf("NTLM: %w", err)
+	}
+
+	// 4. WS-Enumeration: Enumerate → get context handle
+	enumCtx, err := c.wsEnumerate(conn, baseDN, filter, attrs)
 	if err != nil {
 		return nil, fmt.Errorf("ws-enumerate: %w", err)
 	}
 
-	// Step 2: Pull pages
+	// 5. Pull pages until EndOfSequence
 	var allItems []map[string][]string
 	for {
-		items, done, err := c.wsPull(enumCtx, 50)
-		if err != nil {
+		_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+		items, done, pullErr := c.wsPull(conn, enumCtx, 250)
+		if pullErr != nil {
 			break
 		}
 		allItems = append(allItems, items...)
@@ -147,61 +282,337 @@ func (c *Client) enumerate(objectClass string, attrs []string) ([]bh.Node, error
 		}
 	}
 
-	// Step 3: Convert to bh.Node
-	return adwsItemsToNodes(allItems, objectClass), nil
+	// 6. Convert raw attribute maps → bh.Node
+	return adwsItemsToNodes(allItems, c.domain), nil
 }
 
-// wsEnumerate sends a WS-Enumeration Enumerate request and returns the enumeration context.
-func (c *Client) wsEnumerate(objectClass string, attrs []string) (string, error) {
-	filter := fmt.Sprintf(`(objectClass=%s)`, objectClass)
-	attrList := ""
-	for _, a := range attrs {
-		attrList += fmt.Sprintf(`<addata:AttributeType>%s</addata:AttributeType>`, a)
+// ── MC-NMF framing ───────────────────────────────────────────────────────────
+
+// nmfPreamble performs the .NET Message Framing connection-mode preamble.
+//
+//	Client → Server: VersionRequest(1,0) ModeRequest(singleton) ViaRequest(uri)
+//	                  KnownEncoding(UTF8Text) PreambleEnd
+//	Server → Client: VersionResponse(1,0) PreambleAck
+func nmfPreamble(conn net.Conn, via string) error {
+	_ = conn.SetDeadline(time.Now().Add(dialTimeout))
+
+	var buf bytes.Buffer
+
+	// VersionRequest: 0x00 Major=1 Minor=0
+	buf.WriteByte(recVersionRequest)
+	buf.WriteByte(1)
+	buf.WriteByte(0)
+
+	// ModeRequest: 0x02 mode=singleton(1)
+	buf.WriteByte(recModeRequest)
+	buf.WriteByte(modeSingleton)
+
+	// ViaRequest: 0x04 <var-len encoded length> <UTF-8 bytes>
+	buf.WriteByte(recViaRequest)
+	viaBytes := []byte(via)
+	writeVarLen(&buf, len(viaBytes))
+	buf.Write(viaBytes)
+
+	// KnownEncoding: 0x06 <encoding-id>
+	buf.WriteByte(recKnownEncoding)
+	buf.WriteByte(encodingUTF8Text)
+
+	// PreambleEnd: 0x0C
+	buf.WriteByte(recEndRecord)
+
+	if _, err := conn.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("write preamble: %w", err)
 	}
 
+	// Read server response — expect VersionResponse + PreambleAck
+	// Each is a 1-3 byte record; we read until we get 0x0B (PreambleAck)
+	for {
+		rec, err := readRecord(conn)
+		if err != nil {
+			return fmt.Errorf("read preamble response: %w", err)
+		}
+		switch rec[0] {
+		case recVersionResponse:
+			// Major/Minor — ignore version check for compatibility
+		case recPreambleAck:
+			return nil // handshake complete
+		case recFault:
+			return fmt.Errorf("server fault during preamble: %x", rec)
+		}
+	}
+}
+
+// writeVarLen writes a multi-byte variable-length integer (MC-NMF style).
+// Values < 128 are written as a single byte; larger values use 7-bit encoding.
+func writeVarLen(w io.Writer, n int) {
+	b := make([]byte, 0, 5)
+	for {
+		chunk := n & 0x7F
+		n >>= 7
+		if n > 0 {
+			chunk |= 0x80
+		}
+		b = append(b, byte(chunk))
+		if n == 0 {
+			break
+		}
+	}
+	_, _ = w.Write(b)
+}
+
+// readVarLen reads a multi-byte variable-length integer from the connection.
+func readVarLen(r io.Reader) (int, error) {
+	result := 0
+	shift := 0
+	for {
+		var b [1]byte
+		if _, err := r.Read(b[:]); err != nil {
+			return 0, err
+		}
+		result |= (int(b[0]) & 0x7F) << shift
+		if b[0]&0x80 == 0 {
+			break
+		}
+		shift += 7
+		if shift > 28 {
+			return 0, fmt.Errorf("varint overflow")
+		}
+	}
+	return result, nil
+}
+
+// readRecord reads one MC-NMF record. For simple single-byte records (Version,
+// Mode, PreambleAck, End) it returns just the type byte. For payload records
+// (SizedEnvelope) it reads the length-prefixed body.
+func readRecord(r io.Reader) ([]byte, error) {
+	var typeBuf [1]byte
+	if _, err := io.ReadFull(r, typeBuf[:]); err != nil {
+		return nil, err
+	}
+	switch typeBuf[0] {
+	case recVersionResponse:
+		// 2 more bytes: major, minor
+		extra := make([]byte, 2)
+		if _, err := io.ReadFull(r, extra); err != nil {
+			return nil, err
+		}
+		return append(typeBuf[:], extra...), nil
+
+	case recModeResponse:
+		// 1 more byte: mode
+		extra := make([]byte, 1)
+		if _, err := io.ReadFull(r, extra); err != nil {
+			return nil, err
+		}
+		return append(typeBuf[:], extra...), nil
+
+	case recPreambleAck, recEndRecord, recEnd:
+		return typeBuf[:], nil
+
+	case recFault:
+		// fault: var-len string
+		n, err := readVarLen(r)
+		if err != nil {
+			return nil, err
+		}
+		msg := make([]byte, n)
+		if _, err := io.ReadFull(r, msg); err != nil {
+			return nil, err
+		}
+		return append(typeBuf[:], msg...), nil
+
+	case recSizedEnvelope:
+		// 4-byte little-endian length followed by payload
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+			return nil, err
+		}
+		size := binary.LittleEndian.Uint32(lenBuf[:])
+		if size > 16*1024*1024 {
+			return nil, fmt.Errorf("envelope too large: %d bytes", size)
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+
+	case recUnsizedEnvelope:
+		// Chunked: read 4-byte chunk size, chunk data, repeat until 0-length chunk
+		var out []byte
+		for {
+			var lenBuf [4]byte
+			if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+				return nil, err
+			}
+			chunkSize := binary.LittleEndian.Uint32(lenBuf[:])
+			if chunkSize == 0 {
+				break
+			}
+			chunk := make([]byte, chunkSize)
+			if _, err := io.ReadFull(r, chunk); err != nil {
+				return nil, err
+			}
+			out = append(out, chunk...)
+		}
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("unknown NMF record type: 0x%02X", typeBuf[0])
+	}
+}
+
+// sendEnvelope wraps an XML SOAP body in an MC-NMF SizedEnvelope record and
+// writes it to the connection.
+func sendEnvelope(conn net.Conn, xmlBody []byte) error {
+	var buf bytes.Buffer
+	buf.WriteByte(recSizedEnvelope)
+	lb := make([]byte, 4)
+	binary.LittleEndian.PutUint32(lb, uint32(len(xmlBody)))
+	buf.Write(lb)
+	buf.Write(xmlBody)
+	_, err := conn.Write(buf.Bytes())
+	return err
+}
+
+// recvEnvelope reads one NMF record and returns its payload bytes.
+func recvEnvelope(conn net.Conn) ([]byte, error) {
+	return readRecord(conn)
+}
+
+// ── NTLM handshake ───────────────────────────────────────────────────────────
+
+// ntlmHandshake performs a two-step NTLM Negotiate/Challenge/Authenticate over
+// the NMF channel. We embed NTLM binary tokens in SOAP Security headers.
+func (c *Client) ntlmHandshake(conn net.Conn) error {
+	// Step 1: Build NTLM Negotiate token (Type 1)
+	negotiateMsg, err := ntlmssp.NewNegotiateMessage(c.domain, "")
+	if err != nil {
+		return fmt.Errorf("ntlm negotiate: %w", err)
+	}
+
+	// Send SOAP envelope with Negotiate token
+	neg64 := b64Encode(negotiateMsg)
+	negotiateSOAP := buildSecuritySOAP(neg64, c.viaEnum, actionNegotiate)
+	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+	if err := sendEnvelope(conn, negotiateSOAP); err != nil {
+		return fmt.Errorf("send negotiate: %w", err)
+	}
+
+	// Receive challenge (Type 2)
+	challengeXML, err := recvEnvelope(conn)
+	if err != nil {
+		return fmt.Errorf("recv challenge: %w", err)
+	}
+
+	challengeToken, err := extractSecurityToken(challengeXML)
+	if err != nil {
+		return fmt.Errorf("extract challenge: %w", err)
+	}
+
+	// Step 2: Build NTLM Authenticate token (Type 3)
+	authenticateMsg, err := ntlmssp.ProcessChallenge(challengeToken, c.username, c.password, true)
+	if err != nil {
+		return fmt.Errorf("ntlm authenticate: %w", err)
+	}
+
+	auth64 := b64Encode(authenticateMsg)
+	authenticateSOAP := buildSecuritySOAP(auth64, c.viaEnum, actionAuthenticate)
+	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+	if err := sendEnvelope(conn, authenticateSOAP); err != nil {
+		return fmt.Errorf("send authenticate: %w", err)
+	}
+
+	// Receive auth response — should be a 200-equivalent SOAP envelope
+	authResp, err := recvEnvelope(conn)
+	if err != nil {
+		return fmt.Errorf("recv auth response: %w", err)
+	}
+
+	// Check for fault
+	if bytes.Contains(authResp, []byte("Fault")) || bytes.Contains(authResp, []byte("fault")) {
+		return fmt.Errorf("auth rejected by server: %s", truncate(string(authResp), 300))
+	}
+
+	return nil
+}
+
+// ── WS-Enumeration ───────────────────────────────────────────────────────────
+
+const (
+	actionEnumerate    = "http://schemas.xmlsoap.org/ws/2004/09/enumeration/Enumerate"
+	actionPull         = "http://schemas.xmlsoap.org/ws/2004/09/enumeration/Pull"
+	actionNegotiate    = "http://schemas.microsoft.com/ws/2006/05/security/NegotiateLegs/Leg1"
+	actionAuthenticate = "http://schemas.microsoft.com/ws/2006/05/security/NegotiateLegs/Leg2"
+
+	nsSOAP  = "http://www.w3.org/2003/05/soap-envelope"
+	nsWSA   = "http://www.w3.org/2005/08/addressing"
+	nsWSEN  = "http://schemas.xmlsoap.org/ws/2004/09/enumeration"
+	nsAD    = "http://schemas.microsoft.com/2008/1/ActiveDirectory"
+	nsADDAT = "http://schemas.microsoft.com/2008/1/ActiveDirectory/Data"
+)
+
+// wsEnumerate sends Enumerate and returns the EnumerationContext handle.
+func (c *Client) wsEnumerate(conn net.Conn, baseDN, filter string, attrs []string) (string, error) {
+	attrXML := buildAttrList(attrs)
+
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:a="http://www.w3.org/2005/08/addressing"
-            xmlns:wsen="http://schemas.xmlsoap.org/ws/2004/09/enumeration"
-            xmlns:addata="http://schemas.microsoft.com/2008/1/ActiveDirectory/Data"
-            xmlns:ad="http://schemas.microsoft.com/2008/1/ActiveDirectory">
+<s:Envelope xmlns:s="%s"
+            xmlns:a="%s"
+            xmlns:wsen="%s"
+            xmlns:ad="%s"
+            xmlns:addata="%s">
   <s:Header>
-    <a:Action s:mustUnderstand="1">http://schemas.xmlsoap.org/ws/2004/09/enumeration/Enumerate</a:Action>
+    <a:Action s:mustUnderstand="1">%s</a:Action>
     <a:To s:mustUnderstand="1">%s</a:To>
+    <a:MessageID>urn:uuid:necromancer-enum-01</a:MessageID>
   </s:Header>
   <s:Body>
     <wsen:Enumerate>
       <wsen:Filter Dialect="http://schemas.microsoft.com/ADWS/2008/04/ADOPathDialect">%s</wsen:Filter>
       <ad:AttributeParameters>%s</ad:AttributeParameters>
+      <ad:BaseObjectSearchProperties>
+        <ad:SearchBase>%s</ad:SearchBase>
+        <ad:SearchScope>subtree</ad:SearchScope>
+      </ad:BaseObjectSearchProperties>
     </wsen:Enumerate>
   </s:Body>
-</s:Envelope>`, c.baseURL, filter, attrList)
-
-	resp, err := c.soapRequest(
-		"http://schemas.xmlsoap.org/ws/2004/09/enumeration/Enumerate",
-		[]byte(body),
+</s:Envelope>`,
+		nsSOAP, nsWSA, nsWSEN, nsAD, nsADDAT,
+		actionEnumerate,
+		c.viaEnum,
+		xmlEscape(filter),
+		attrXML,
+		xmlEscape(baseDN),
 	)
+
+	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+	if err := sendEnvelope(conn, []byte(body)); err != nil {
+		return "", err
+	}
+
+	resp, err := recvEnvelope(conn)
 	if err != nil {
 		return "", err
 	}
 
-	// Extract EnumerationContext from response
 	ctx := extractXMLValue(resp, "EnumerationContext")
 	if ctx == "" {
-		return "", fmt.Errorf("no enumeration context in response")
+		return "", fmt.Errorf("server response missing EnumerationContext: %s", truncate(string(resp), 400))
 	}
 	return ctx, nil
 }
 
-// wsPull retrieves the next page of results for the given enumeration context.
-func (c *Client) wsPull(ctx string, maxElements int) ([]map[string][]string, bool, error) {
+// wsPull issues one Pull request and returns items + EndOfSequence flag.
+func (c *Client) wsPull(conn net.Conn, enumCtx string, maxElements int) ([]map[string][]string, bool, error) {
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:a="http://www.w3.org/2005/08/addressing"
-            xmlns:wsen="http://schemas.xmlsoap.org/ws/2004/09/enumeration">
+<s:Envelope xmlns:s="%s"
+            xmlns:a="%s"
+            xmlns:wsen="%s">
   <s:Header>
-    <a:Action s:mustUnderstand="1">http://schemas.xmlsoap.org/ws/2004/09/enumeration/Pull</a:Action>
+    <a:Action s:mustUnderstand="1">%s</a:Action>
     <a:To s:mustUnderstand="1">%s</a:To>
+    <a:MessageID>urn:uuid:necromancer-pull-01</a:MessageID>
   </s:Header>
   <s:Body>
     <wsen:Pull>
@@ -209,104 +620,395 @@ func (c *Client) wsPull(ctx string, maxElements int) ([]map[string][]string, boo
       <wsen:MaxElements>%d</wsen:MaxElements>
     </wsen:Pull>
   </s:Body>
-</s:Envelope>`, c.baseURL, ctx, maxElements)
-
-	resp, err := c.soapRequest(
-		"http://schemas.xmlsoap.org/ws/2004/09/enumeration/Pull",
-		[]byte(body),
+</s:Envelope>`,
+		nsSOAP, nsWSA, nsWSEN,
+		actionPull,
+		c.viaEnum,
+		xmlEscape(enumCtx),
+		maxElements,
 	)
+
+	if err := sendEnvelope(conn, []byte(body)); err != nil {
+		return nil, true, err
+	}
+
+	resp, err := recvEnvelope(conn)
 	if err != nil {
 		return nil, true, err
 	}
 
 	items := parseADWSItems(resp)
-	endOfSeq := strings.Contains(string(resp), "EndOfSequence")
+	endOfSeq := bytes.Contains(resp, []byte("EndOfSequence"))
 	return items, endOfSeq, nil
 }
 
-// soapRequest sends a SOAP request to the ADWS endpoint.
-func (c *Client) soapRequest(action string, body []byte) ([]byte, error) {
-	req, err := http.NewRequest("POST", c.baseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", `application/soap+xml; charset=utf-8`)
-	req.Header.Set("SOAPAction", action)
-	req.SetBasicAuth(c.username+"@"+c.domain, c.password)
+// ── XML helpers ──────────────────────────────────────────────────────────────
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ADWS HTTP %d: %s", resp.StatusCode, truncate(string(data), 200))
-	}
-	return io.ReadAll(resp.Body)
+// adwsItem is used for XML unmarshalling of ADWS Pull responses.
+type adwsItem struct {
+	XMLName xml.Name
+	Attrs   []adwsAttr `xml:",any"`
 }
 
-// ---- XML helpers ----
-
-func extractXMLValue(data []byte, tag string) string {
-	s := string(data)
-	start := strings.Index(s, "<"+tag+">")
-	if start < 0 {
-		// Try namespaced tag
-		start = strings.Index(s, ":"+tag+">")
-		if start < 0 {
-			return ""
-		}
-		start = strings.LastIndex(s[:start], "<")
-		endTag := s[start:]
-		colIdx := strings.Index(endTag, ":")
-		if colIdx < 0 {
-			return ""
-		}
-		startContent := strings.Index(s, ">") // first >
-		_ = startContent
-	}
-	open := strings.Index(s, ">")
-	if open < 0 {
-		return ""
-	}
-	content := s[start+len("<"+tag+">"):]
-	end := strings.Index(content, "</")
-	if end < 0 {
-		return ""
-	}
-	return content[:end]
+type adwsAttr struct {
+	XMLName xml.Name
+	Values  []string `xml:",chardata"`
 }
 
-// parseADWSItems is a minimal ADWS XML result parser.
-// In a full implementation this should use encoding/xml; this is a functional stub.
+// parseADWSItems parses a SOAP Pull response and extracts a slice of attribute maps.
+// Each map entry is attrName → []values.
 func parseADWSItems(data []byte) []map[string][]string {
-	// For now returns empty — a proper XML parser is hooked in via adws/soap.go
-	_ = data
-	return nil
+	// We look for the Items element and parse each child as an AD object.
+	// The response looks like:
+	//   <wsen:PullResponse>
+	//     <wsen:Items>
+	//       <addata:user>
+	//         <addata:name><addata:value>...</addata:value></addata:name>
+	//         ...
+	//       </addata:user>
+	//     </wsen:Items>
+	//   </wsen:PullResponse>
+
+	type adValue struct {
+		Text string `xml:",chardata"`
+	}
+	type adAttrWrapper struct {
+		XMLName xml.Name
+		Values  []adValue `xml:"value"`
+		// also handle direct text (non-multi-valued)
+		Text string `xml:",chardata"`
+	}
+	type adObject struct {
+		XMLName xml.Name
+		Attrs   []adAttrWrapper `xml:",any"`
+	}
+	type itemsBlock struct {
+		Objects []adObject `xml:",any"`
+	}
+	type pullResp struct {
+		Items itemsBlock `xml:"Body>PullResponse>Items"`
+	}
+
+	var resp pullResp
+	if err := xml.Unmarshal(data, &resp); err != nil {
+		// Fallback: attempt raw string extraction
+		return parseADWSItemsFallback(data)
+	}
+
+	var result []map[string][]string
+	for _, obj := range resp.Items.Objects {
+		m := make(map[string][]string, len(obj.Attrs))
+		for _, attr := range obj.Attrs {
+			name := localName(attr.XMLName.Local)
+			var vals []string
+			if len(attr.Values) > 0 {
+				for _, v := range attr.Values {
+					if v.Text != "" {
+						vals = append(vals, v.Text)
+					}
+				}
+			}
+			if len(vals) == 0 && strings.TrimSpace(attr.Text) != "" {
+				vals = []string{strings.TrimSpace(attr.Text)}
+			}
+			if len(vals) > 0 {
+				m[name] = vals
+			}
+		}
+		if len(m) > 0 {
+			result = append(result, m)
+		}
+	}
+	return result
 }
 
-func adwsItemsToNodes(items []map[string][]string, objType string) []bh.Node {
+// parseADWSItemsFallback does a minimal string-scan fallback when xml.Unmarshal fails.
+func parseADWSItemsFallback(data []byte) []map[string][]string {
+	// Very simple: find <addata:*> blocks and extract tag/value pairs
+	s := string(data)
+	var results []map[string][]string
+
+	// Split on common object-type wrappers
+	objTypes := []string{"user", "group", "computer", "domain",
+		"groupPolicyContainer", "organizationalUnit",
+		"pKICertificateTemplate", "certificationAuthority",
+		"domainDNS", "trustedDomain"}
+
+	for _, ot := range objTypes {
+		openTag := "<addata:" + ot + ">"
+		closeTag := "</addata:" + ot + ">"
+		start := 0
+		for {
+			s1 := strings.Index(s[start:], openTag)
+			if s1 < 0 {
+				break
+			}
+			s1 += start
+			s2 := strings.Index(s[s1:], closeTag)
+			if s2 < 0 {
+				break
+			}
+			s2 += s1 + len(closeTag)
+			block := s[s1+len(openTag) : s2-len(closeTag)]
+			m := extractAttrMap(block)
+			if len(m) > 0 {
+				results = append(results, m)
+			}
+			start = s2
+		}
+	}
+	return results
+}
+
+// extractAttrMap scans an XML block for <addata:NAME><addata:value>VAL</addata:value></addata:NAME> patterns.
+func extractAttrMap(block string) map[string][]string {
+	m := make(map[string][]string)
+	i := 0
+	for i < len(block) {
+		// Find next <addata:XXX>
+		openIdx := strings.Index(block[i:], "<addata:")
+		if openIdx < 0 {
+			break
+		}
+		openIdx += i
+		closeAngle := strings.Index(block[openIdx:], ">")
+		if closeAngle < 0 {
+			break
+		}
+		closeAngle += openIdx
+		tagName := block[openIdx+len("<addata:") : closeAngle]
+		// Skip self-closing or attribute tags
+		if strings.HasSuffix(tagName, "/") || strings.ContainsAny(tagName, " \t") {
+			i = closeAngle + 1
+			continue
+		}
+		closeTag := "</addata:" + tagName + ">"
+		endIdx := strings.Index(block[closeAngle:], closeTag)
+		if endIdx < 0 {
+			i = closeAngle + 1
+			continue
+		}
+		endIdx += closeAngle
+		inner := block[closeAngle+1 : endIdx]
+
+		// Extract <addata:value> children
+		var vals []string
+		vi := 0
+		for vi < len(inner) {
+			vs := strings.Index(inner[vi:], "<addata:value>")
+			if vs < 0 {
+				break
+			}
+			vs += vi
+			ve := strings.Index(inner[vs:], "</addata:value>")
+			if ve < 0 {
+				break
+			}
+			ve += vs
+			val := inner[vs+len("<addata:value>") : ve]
+			if val != "" {
+				vals = append(vals, val)
+			}
+			vi = ve + len("</addata:value>")
+		}
+		// If no <addata:value> children, use direct text content
+		if len(vals) == 0 {
+			t := stripXMLTags(inner)
+			if t != "" {
+				vals = []string{t}
+			}
+		}
+		if len(vals) > 0 {
+			m[tagName] = vals
+		}
+		i = endIdx + len(closeTag)
+	}
+	return m
+}
+
+// stripXMLTags removes all XML tags from a string, leaving only text content.
+func stripXMLTags(s string) string {
+	var out strings.Builder
+	inTag := false
+	for _, c := range s {
+		switch {
+		case c == '<':
+			inTag = true
+		case c == '>':
+			inTag = false
+		case !inTag:
+			out.WriteRune(c)
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// extractXMLValue extracts the text content of the first element matching a
+// local tag name (namespace-agnostic).
+func extractXMLValue(data []byte, tagLocal string) string {
+	s := string(data)
+	// Try plain <tag>
+	patterns := []string{
+		"<" + tagLocal + ">",
+		":" + tagLocal + ">",
+	}
+	for _, pat := range patterns {
+		idx := strings.Index(s, pat)
+		if idx < 0 {
+			continue
+		}
+		start := idx + len(pat)
+		end := strings.Index(s[start:], "<")
+		if end < 0 {
+			continue
+		}
+		val := strings.TrimSpace(s[start : start+end])
+		if val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
+// extractSecurityToken pulls a base64-encoded NTLM token from a SOAP Security header.
+func extractSecurityToken(data []byte) ([]byte, error) {
+	s := string(data)
+	// Look for BinarySecurityToken element content
+	patterns := []string{"<wsse:BinarySecurityToken", "<BinarySecurityToken"}
+	for _, pat := range patterns {
+		idx := strings.Index(s, pat)
+		if idx < 0 {
+			continue
+		}
+		// Skip to end of opening tag
+		end := strings.Index(s[idx:], ">")
+		if end < 0 {
+			continue
+		}
+		start := idx + end + 1
+		endIdx := strings.Index(s[start:], "<")
+		if endIdx < 0 {
+			continue
+		}
+		token64 := strings.TrimSpace(s[start : start+endIdx])
+		if token64 != "" {
+			return b64Decode(token64)
+		}
+	}
+	return nil, fmt.Errorf("no BinarySecurityToken found in response")
+}
+
+// buildSecuritySOAP creates a minimal SOAP envelope carrying an NTLM Negotiate token.
+func buildSecuritySOAP(tokenB64, to, action string) []byte {
+	const wsseNS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
+	const wsuNS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
+	const ntlmType = "http://schemas.microsoft.com/ws/2006/05/security/Negotiate"
+
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="%s" xmlns:a="%s">
+  <s:Header>
+    <a:Action s:mustUnderstand="1">%s</a:Action>
+    <a:To s:mustUnderstand="1">%s</a:To>
+    <a:MessageID>urn:uuid:necromancer-auth-01</a:MessageID>
+    <wsse:Security xmlns:wsse="%s" xmlns:wsu="%s" s:mustUnderstand="1">
+      <wsse:BinarySecurityToken
+        ValueType="%s"
+        EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
+        wsu:Id="SecurityToken-1">%s</wsse:BinarySecurityToken>
+    </wsse:Security>
+  </s:Header>
+  <s:Body/>
+</s:Envelope>`,
+		nsSOAP, nsWSA,
+		xmlEscape(action),
+		xmlEscape(to),
+		wsseNS, wsuNS,
+		ntlmType,
+		tokenB64,
+	)
+	return []byte(body)
+}
+
+// buildAttrList returns the <addata:AttributeType> XML block for an attr list.
+func buildAttrList(attrs []string) string {
+	var sb strings.Builder
+	for _, a := range attrs {
+		sb.WriteString(fmt.Sprintf("<addata:AttributeType>%s</addata:AttributeType>", a))
+	}
+	return sb.String()
+}
+
+// localName strips any namespace prefix from an XML local name.
+func localName(s string) string {
+	if idx := strings.LastIndex(s, ":"); idx >= 0 {
+		return s[idx+1:]
+	}
+	return s
+}
+
+// xmlEscape escapes a string for safe XML embedding.
+func xmlEscape(s string) string {
+	var buf bytes.Buffer
+	_ = xml.EscapeText(&buf, []byte(s))
+	return buf.String()
+}
+
+// ── Node conversion ──────────────────────────────────────────────────────────
+
+// adwsItemsToNodes converts raw ADWS attribute maps into bh.Node objects.
+func adwsItemsToNodes(items []map[string][]string, domain string) []bh.Node {
 	nodes := make([]bh.Node, 0, len(items))
 	for _, item := range items {
 		sid := firstVal(item, "objectSid")
 		if sid == "" {
 			sid = firstVal(item, "objectGUID")
 		}
-		nodes = append(nodes, bh.Node{
+		if sid == "" {
+			sid = firstVal(item, "distinguishedName")
+		}
+
+		uacStr := firstVal(item, "userAccountControl")
+		uac := parseUint64(uacStr)
+		enabled := uac == 0 || (uac&0x2 == 0)
+
+		spns := item["servicePrincipalName"]
+
+		node := bh.Node{
 			ObjectIdentifier: sid,
-			ObjectType:       objType,
 			Properties: bh.Properties{
-				Name:              firstVal(item, "name"),
-				DistinguishedName: firstVal(item, "distinguishedName"),
-				Description:       firstVal(item, "description"),
-				AdminCount:        firstVal(item, "adminCount") == "1",
-				RawAttributes:     item,
+				Name:                  firstVal(item, "name"),
+				Domain:                domain,
+				Description:           firstVal(item, "description"),
+				DistinguishedName:     firstVal(item, "distinguishedName"),
+				AdminCount:            firstVal(item, "adminCount") == "1",
+				Enabled:               enabled,
+				PasswordLastSet:       parseWindowsTime(firstVal(item, "pwdLastSet")),
+				LastLogon:             parseWindowsTime(firstVal(item, "lastLogon")),
+				OperatingSystem:       firstVal(item, "operatingSystem"),
+				SAMAccountName:        firstVal(item, "sAMAccountName"),
+				ServicePrincipalNames: spns,
+				HasSPN:                len(spns) > 0,
+				Members:               item["member"],
+				MemberOf:              item["memberOf"],
+				RawAttributes:         item,
 			},
-		})
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes
+}
+
+// ── Misc helpers ─────────────────────────────────────────────────────────────
+
+// domainToDN converts a domain FQDN to an LDAP DN.
+// e.g. "corp.local" → "DC=corp,DC=local"
+func domainToDN(domain string) string {
+	parts := strings.Split(domain, ".")
+	dcs := make([]string, len(parts))
+	for i, p := range parts {
+		dcs[i] = "DC=" + p
+	}
+	return strings.Join(dcs, ",")
 }
 
 func firstVal(m map[string][]string, key string) string {
@@ -330,41 +1032,82 @@ func jitter(minMs, maxMs int) {
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 }
 
-// ---- Attribute lists per object type ----
+func parseUint64(s string) uint64 {
+	if s == "" {
+		return 0
+	}
+	var v uint64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		v = v*10 + uint64(c-'0')
+	}
+	return v
+}
+
+func parseWindowsTime(s string) int64 {
+	v := int64(parseUint64(s))
+	if v == 0 || v == 9223372036854775807 {
+		return -1
+	}
+	return (v - 116444736000000000) / 10000000
+}
+
+// ── Attribute lists ──────────────────────────────────────────────────────────
 
 var userAttrs = []string{
 	"objectSid", "sAMAccountName", "userPrincipalName", "distinguishedName",
 	"name", "description", "adminCount", "userAccountControl",
-	"pwdLastSet", "lastLogon", "servicePrincipalName", "memberOf",
-	"msDS-AllowedToActOnBehalfOfOtherIdentity", "msDS-KeyCredentialLink",
+	"pwdLastSet", "lastLogon", "lastLogonTimestamp",
+	"servicePrincipalName", "memberOf",
+	"nTSecurityDescriptor",
+	"msDS-AllowedToActOnBehalfOfOtherIdentity",
+	"msDS-KeyCredentialLink",
 }
+
 var groupAttrs = []string{
 	"objectSid", "sAMAccountName", "distinguishedName", "name",
 	"description", "adminCount", "member", "memberOf", "groupType",
+	"nTSecurityDescriptor",
 }
+
 var computerAttrs = []string{
 	"objectSid", "sAMAccountName", "dNSHostName", "distinguishedName",
 	"name", "description", "adminCount", "operatingSystem",
-	"userAccountControl", "lastLogon", "msDS-AllowedToActOnBehalfOfOtherIdentity",
-	"msDS-AllowedToDelegateTo", "ms-MCS-AdmPwd", "msLAPS-Password",
+	"operatingSystemVersion", "userAccountControl", "lastLogon",
+	"nTSecurityDescriptor",
+	"msDS-AllowedToActOnBehalfOfOtherIdentity",
+	"msDS-AllowedToDelegateTo",
+	"msLAPS-Password", "ms-MCS-AdmPwd",
 }
+
 var domainAttrs = []string{
 	"objectSid", "distinguishedName", "name", "description",
-	"msDS-Behavior-Version", "objectGUID",
+	"msDS-Behavior-Version", "objectGUID", "nTSecurityDescriptor",
 }
+
 var gpoAttrs = []string{
 	"objectGUID", "displayName", "distinguishedName", "name",
-	"description", "gPCFileSysPath",
+	"description", "gPCFileSysPath", "nTSecurityDescriptor",
 }
+
 var ouAttrs = []string{
-	"objectGUID", "ou", "distinguishedName", "name", "description", "gpLink",
+	"objectGUID", "ou", "distinguishedName", "name",
+	"description", "gpLink", "nTSecurityDescriptor",
 }
+
 var certAttrs = []string{
 	"objectGUID", "cn", "distinguishedName", "name",
 	"msPKI-Certificate-Name-Flag", "msPKI-Enrollment-Flag",
 	"msPKI-RA-Signature", "pKIExtendedKeyUsage",
+	"msPKI-Certificate-Application-Policy",
+	"msPKI-Template-Schema-Version",
+	"nTSecurityDescriptor",
 }
+
 var caAttrs = []string{
 	"objectGUID", "cn", "distinguishedName", "name",
 	"cACertificate", "certificateTemplates",
+	"nTSecurityDescriptor",
 }

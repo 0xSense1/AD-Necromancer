@@ -182,10 +182,18 @@ func main() {
 			if err := exfil.SaveLocal(ez, "adn_data.zip"); err != nil {
 				log.Fatalf(ColorRed+"[!] Save failed: %v"+ColorReset, err)
 			}
-			if !stealth {
-				fmt.Println(ColorGreen + "[+] Saved: adn_data.zip (AES-256-GCM encrypted)" + ColorReset)
-				fmt.Printf(ColorYellow+"[🔑] Decryption key: %s\n"+ColorReset, ez.KeyHex())
-				fmt.Println(ColorYellow + "[!] Store this key securely — it will NOT be logged or saved automatically." + ColorReset)
+
+			// Save decryption key to timestamped file — never print it to console.
+			keyFile := exfil.KeyFileName()
+			if err := exfil.SaveKey(ez, keyFile); err != nil {
+				// Key file write failed — warn loudly regardless of stealth mode.
+				fmt.Printf(ColorRed+"[!] CRITICAL: Could not save key file: %v"+ColorReset+"\n", err)
+				fmt.Println(ColorRed + "[!] Data is UNRECOVERABLE without the decryption key!" + ColorReset)
+			} else if stealth {
+				// Stealth: one silent line only — no key value ever
+				fmt.Printf("[key]→%s\n", keyFile)
+			} else {
+				printKeyBox(keyFile)
 			}
 		}
 
@@ -201,6 +209,11 @@ func main() {
 				fmt.Println(ColorGreen + "[+] Exfil complete." + ColorReset)
 			}
 		}
+	}
+
+	// Stealth-mode easter egg — only after a clean, complete run.
+	if stealth && liveMode {
+		fmt.Println("[?] Where is the EDR...? Still sleeping peacefully... didn't even notice us 😴")
 	}
 
 	// ---- Phase 5: AI Necromancy Analysis (optional --analyze flag) ----
@@ -324,11 +337,16 @@ func printBannerV2() {
   ██╔██╗ ██║█████╗  ██║     ██████╔╝██║   ██║██╔████╔██║███████║██╔██╗ ██║██║     █████╗  ██████╔╝    ██║   ██║ █████╔╝
   ██║╚██╗██║██╔══╝  ██║     ██╔══██╗██║   ██║██║╚██╔╝██║██╔══██║██║╚██╗██║██║     ██╔══╝  ██╔══██╗    ╚██╗ ██╔╝██╔═══╝ 
   ██║ ╚████║███████╗╚██████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║██║  ██║██║ ╚████║╚██████╗███████╗██║  ██║     ╚████╔╝ ███████╗
-  ╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚══════╝
-                                                                    [ v2 — Privilege Archaeology Engine ]
-                                             "Humans forget. Directories do not."
-`
+  ╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚══════╝`
 	fmt.Println(ColorRed + banner + ColorReset)
+	fmt.Println(ColorRed + "  ╔══════════════════════════════════════════════════════════════════════════════════════╗" + ColorReset)
+	fmt.Println(ColorRed + "  ║" + ColorReset + ColorBold + "  v2 · Privilege Archaeology Engine  ·  DEFCON Research Edition                     " + ColorReset + ColorRed + "║" + ColorReset)
+	fmt.Println(ColorRed + "  ║" + ColorReset + ColorCyan  + "  Protocol  : ADWS-First (MC-NMF/NTLM) → LDAP Ghosting fallback                     " + ColorReset + ColorRed + "║" + ColorReset)
+	fmt.Println(ColorRed + "  ║" + ColorReset + ColorCyan  + "  Evasion   : ETW patch · DLL unhook · Direct syscalls (Halos Gate)                  " + ColorReset + ColorRed + "║" + ColorReset)
+	fmt.Println(ColorRed + "  ║" + ColorReset + ColorCyan  + "  Output    : AES-256-GCM encrypted zip · key never printed to console               " + ColorReset + ColorRed + "║" + ColorReset)
+	fmt.Println(ColorRed + "  ║" + ColorReset + ColorPurple+ "  \"Humans forget. Directories do not.\"                                               " + ColorReset + ColorRed + "║" + ColorReset)
+	fmt.Println(ColorRed + "  ╚══════════════════════════════════════════════════════════════════════════════════════╝" + ColorReset)
+	fmt.Println()
 }
 
 func printPaths(paths []necromancy.ZombiePath) {
@@ -386,4 +404,22 @@ func splitBullets(text string) []string {
 		return out
 	}
 	return []string{text}
+}
+
+// printKeyBox prints a clean, boxed notification that the key has been saved.
+// The actual key hex is NEVER displayed — only the filename.
+func printKeyBox(keyFile string) {
+	sep := "  ╔══════════════════════════════════════════════════════════╗"
+	bot := "  ╚══════════════════════════════════════════════════════════╝"
+	fmt.Println()
+	fmt.Println(ColorGreen + sep + ColorReset)
+	fmt.Println(ColorGreen + "  ║" + ColorReset + ColorBold + "  🔐 ENCRYPTED DATA SAVED                                 " + ColorReset + ColorGreen + "║" + ColorReset)
+	fmt.Println(ColorGreen + "  ║" + ColorReset + ColorReset + "                                                          " + ColorGreen + "║" + ColorReset)
+	fmt.Printf(ColorGreen+"  ║"+ColorReset+ColorYellow+"  Payload  : adn_data.zip (AES-256-GCM)                   "+ColorReset+ColorGreen+"║\n"+ColorReset)
+	fmt.Printf(ColorGreen+"  ║"+ColorReset+ColorYellow+"  Key file : %-44s  "+ColorReset+ColorGreen+"║\n"+ColorReset, keyFile)
+	fmt.Println(ColorGreen + "  ║" + ColorReset + ColorReset + "                                                          " + ColorGreen + "║" + ColorReset)
+	fmt.Println(ColorGreen + "  ║" + ColorReset + ColorRed + "  ⚠  Keep this key safe.                                  " + ColorReset + ColorGreen + "║" + ColorReset)
+	fmt.Println(ColorGreen + "  ║" + ColorReset + ColorRed + "     It will NOT be saved automatically anywhere else.    " + ColorReset + ColorGreen + "║" + ColorReset)
+	fmt.Println(ColorGreen + bot + ColorReset)
+	fmt.Println()
 }
