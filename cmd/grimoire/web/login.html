@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NECROMANCER v2 — Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:       #0d0f19;
+      --card:     #161a27;
+      --border:   #2a2d40;
+      --hot:      #8a2060;
+      --text:     #d4d6e0;
+      --dim:      #8a8fa8;
+      --red:      #c0392b;
+      --redbr:    #e74c3c;
+      --purple:   #9b59b6;
+      --gold:     #d4ac0d;
+      --green:    #27ae60;
+      --input:    #0f1220;
+      --mono:     'Share Tech Mono', 'Courier New', monospace;
+      --title:    'Cinzel', serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      background: radial-gradient(ellipse at 30% 20%, #1a1228 0%, #0d0f19 60%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      color: var(--text);
+    }
+
+    /* Subtle background glow */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        radial-gradient(1px 1px at 20% 30%, rgba(155,89,182,.25), transparent),
+        radial-gradient(1px 1px at 80% 10%, rgba(192,57,43,.2), transparent),
+        radial-gradient(1px 1px at 60% 80%, rgba(155,89,182,.15), transparent),
+        radial-gradient(1px 1px at 10% 70%, rgba(192,57,43,.12), transparent);
+      pointer-events: none;
+    }
+
+    .card {
+      width: 420px;
+      max-width: 95vw;
+      background: var(--card);
+      border: 1px solid var(--hot);
+      padding: 40px 38px 34px;
+      position: relative;
+      box-shadow:
+        0 0 60px rgba(138,32,96,.18),
+        0 0 120px rgba(138,32,96,.05),
+        inset 0 1px 0 rgba(255,255,255,.04);
+    }
+
+    /* Corner decorations */
+    .card::before, .card::after {
+      content: '✦';
+      position: absolute;
+      font-size: 10px;
+      color: var(--hot);
+      opacity: .5;
+    }
+    .card::before { top: 8px; left: 8px; }
+    .card::after  { bottom: 8px; right: 8px; }
+
+    .skull {
+      text-align: center;
+      font-size: 32px;
+      margin-bottom: 12px;
+      filter: drop-shadow(0 0 14px rgba(192,57,43,.5));
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes float {
+      0%,100% { transform: translateY(0); }
+      50%      { transform: translateY(-4px); }
+    }
+
+    h1 {
+      font-family: var(--title);
+      font-size: 18px;
+      letter-spacing: 3px;
+      color: var(--redbr);
+      text-align: center;
+      margin-bottom: 4px;
+      text-shadow: 0 0 20px rgba(231,76,60,.4);
+    }
+
+    .subtitle {
+      text-align: center;
+      font-size: 11px;
+      color: var(--dim);
+      letter-spacing: 1px;
+      margin-bottom: 30px;
+    }
+
+    .mode-badge {
+      background: rgba(138,32,96,.18);
+      border: 1px solid var(--hot);
+      color: var(--purple);
+      font-size: 10px;
+      letter-spacing: 2px;
+      padding: 4px 14px;
+      display: block;
+      text-align: center;
+      width: fit-content;
+      margin: 0 auto 24px;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0 0 22px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      color: var(--dim);
+      margin-bottom: 7px;
+    }
+
+    input[type=text],
+    input[type=password] {
+      width: 100%;
+      background: var(--input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 13px;
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .18s, box-shadow .18s;
+    }
+
+    input:focus {
+      border-color: var(--hot);
+      box-shadow: 0 0 0 2px rgba(138,32,96,.15);
+    }
+
+    .password-wrap {
+      position: relative;
+    }
+
+    .eye-btn {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 4px;
+      transition: color .15s;
+    }
+    .eye-btn:hover { color: var(--purple); }
+
+    /* Password strength bar */
+    #strength-bar {
+      height: 3px;
+      margin-top: 6px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+    #strength-fill {
+      height: 100%;
+      width: 0%;
+      transition: width .3s, background .3s;
+      border-radius: 2px;
+    }
+    #strength-label {
+      font-size: 10px;
+      color: var(--dim);
+      margin-top: 4px;
+      display: none;
+    }
+
+    .submit-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #1a0c2e, #28104a);
+      border: 1px solid var(--hot);
+      color: var(--purple);
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 2px;
+      padding: 12px;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: all .18s;
+    }
+
+    .submit-btn:hover:not(:disabled) {
+      background: linear-gradient(135deg, #240e40, #341460);
+      color: #c07cef;
+      box-shadow: 0 0 20px rgba(138,32,96,.3);
+    }
+
+    .submit-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    .error-box {
+      background: rgba(192,57,43,.1);
+      border: 1px solid rgba(192,57,43,.35);
+      color: var(--redbr);
+      font-size: 12px;
+      padding: 9px 12px;
+      margin-top: 14px;
+      display: none;
+      line-height: 1.5;
+    }
+
+    .success-box {
+      background: rgba(39,174,96,.08);
+      border: 1px solid rgba(39,174,96,.3);
+      color: #52be80;
+      font-size: 12px;
+      padding: 9px 12px;
+      margin-top: 14px;
+      display: none;
+    }
+
+    .footer-note {
+      text-align: center;
+      font-size: 10px;
+      color: var(--dim);
+      margin-top: 22px;
+      line-height: 1.6;
+    }
+
+    .req-list {
+      font-size: 10px;
+      color: var(--dim);
+      margin-top: 6px;
+      padding-left: 2px;
+      list-style: none;
+      display: none;
+    }
+    .req-list li { margin: 3px 0; }
+    .req-list li.ok  { color: var(--green); }
+    .req-list li.ok::before  { content: '✓ '; }
+    .req-list li::before { content: '✗ '; color: var(--redbr); }
+
+    .loading { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="skull">☠</div>
+    <h1>THE GRIMOIRE</h1>
+    <p class="subtitle">AD-Necromancer v2 &nbsp;·&nbsp; C2 Command Interface</p>
+
+    <!-- Mode badge — filled by JS -->
+    <div id="mode-badge" class="mode-badge">AUTHENTICATING…</div>
+    <hr class="divider">
+
+    <!-- Username -->
+    <div class="form-group">
+      <label>USERNAME</label>
+      <input type="text" id="username" autocomplete="username"
+             placeholder="Enter username" maxlength="64">
+    </div>
+
+    <!-- Password -->
+    <div class="form-group">
+      <label>PASSWORD</label>
+      <div class="password-wrap">
+        <input type="password" id="password" autocomplete="current-password"
+               placeholder="Enter password" maxlength="128"
+               oninput="onPasswordInput()">
+        <button class="eye-btn" onclick="togglePassword()" type="button"
+                tabindex="-1">👁</button>
+      </div>
+      <div id="strength-bar"><div id="strength-fill"></div></div>
+      <div id="strength-label"></div>
+      <ul id="req-list" class="req-list">
+        <li id="req-len">At least 8 characters</li>
+        <li id="req-upper">At least one uppercase letter</li>
+        <li id="req-number">At least one number</li>
+      </ul>
+    </div>
+
+    <!-- Confirm password — setup only -->
+    <div class="form-group" id="confirm-group" style="display:none">
+      <label>CONFIRM PASSWORD</label>
+      <div class="password-wrap">
+        <input type="password" id="confirm" placeholder="Repeat password"
+               maxlength="128" autocomplete="new-password">
+        <button class="eye-btn" onclick="toggleConfirm()" type="button"
+                tabindex="-1">👁</button>
+      </div>
+    </div>
+
+    <button class="submit-btn" id="submit-btn" onclick="submit()">
+      ☠ &nbsp; ENTER THE GRIMOIRE
+    </button>
+
+    <div class="error-box"   id="error-box"></div>
+    <div class="success-box" id="success-box"></div>
+
+    <div class="footer-note">
+      Session expires after 24 hours &nbsp;·&nbsp; All connections are TLS encrypted
+    </div>
+  </div>
+
+<script>
+  let isSetup = false;
+
+  // ── Determine mode ────────────────────────────────────────────────────────
+  fetch('/api/auth-status')
+    .then(r => r.json())
+    .then(s => {
+      isSetup = s.setup_required;
+      if (s.authenticated) {
+        window.location.href = '/';
+        return;
+      }
+      if (isSetup) {
+        document.getElementById('mode-badge').textContent   = '⚡ FIRST RUN — CREATE YOUR ACCOUNT';
+        document.getElementById('confirm-group').style.display = 'block';
+        document.getElementById('strength-bar').style.display  = 'block';
+        document.getElementById('strength-label').style.display = 'block';
+        document.getElementById('req-list').style.display      = 'block';
+        document.getElementById('password').placeholder        = 'Choose a strong password';
+        document.getElementById('password').setAttribute('autocomplete', 'new-password');
+      } else {
+        document.getElementById('mode-badge').textContent = '🔐 LOGIN TO CONTINUE';
+      }
+      document.getElementById('username').focus();
+    })
+    .catch(() => {
+      document.getElementById('mode-badge').textContent = '⚠ SERVER UNREACHABLE';
+    });
+
+  // ── Password visibility ─────────────────────────────────────────────────
+  function togglePassword() {
+    const f = document.getElementById('password');
+    f.type = f.type === 'password' ? 'text' : 'password';
+  }
+  function toggleConfirm() {
+    const f = document.getElementById('confirm');
+    f.type = f.type === 'password' ? 'text' : 'password';
+  }
+
+  // ── Password strength ────────────────────────────────────────────────────
+  function onPasswordInput() {
+    if (!isSetup) return;
+    const pw = document.getElementById('password').value;
+    const bar  = document.getElementById('strength-fill');
+    const lbl  = document.getElementById('strength-label');
+    const reqLen   = document.getElementById('req-len');
+    const reqUpper = document.getElementById('req-upper');
+    const reqNum   = document.getElementById('req-number');
+
+    const hasLen   = pw.length >= 8;
+    const hasUpper = /[A-Z]/.test(pw);
+    const hasNum   = /[0-9]/.test(pw);
+
+    reqLen.className   = hasLen   ? 'ok' : '';
+    reqUpper.className = hasUpper ? 'ok' : '';
+    reqNum.className   = hasNum   ? 'ok' : '';
+
+    let score = 0;
+    if (hasLen)        score++;
+    if (hasUpper)      score++;
+    if (hasNum)        score++;
+    if (/[^a-zA-Z0-9]/.test(pw)) score++;
+    if (pw.length >= 16)          score++;
+
+    const colors = ['#e74c3c', '#e67e22', '#d4ac0d', '#27ae60', '#1abc9c'];
+    const labels = ['Very Weak', 'Weak', 'Fair', 'Strong', 'Very Strong'];
+    const pct    = Math.min(100, score * 20);
+
+    bar.style.width      = pct + '%';
+    bar.style.background = colors[score - 1] || '#444';
+    lbl.textContent      = pw ? labels[score - 1] || '' : '';
+    lbl.style.color      = colors[score - 1] || 'var(--dim)';
+  }
+
+  // ── Submit ────────────────────────────────────────────────────────────────
+  async function submit() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const confirm  = document.getElementById('confirm').value;
+    const btn      = document.getElementById('submit-btn');
+
+    hideMessages();
+
+    if (!username) return showError('Please enter a username.');
+    if (!password) return showError('Please enter a password.');
+
+    if (isSetup) {
+      if (username.length < 3)  return showError('Username must be at least 3 characters.');
+      if (password.length < 8)  return showError('Password must be at least 8 characters.');
+      if (password !== confirm)  return showError('Passwords do not match.');
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading">⟳</span> &nbsp; ENTERING…';
+
+    try {
+      const endpoint = isSetup ? '/api/setup' : '/api/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        showError(data.error || 'Authentication failed.');
+        btn.disabled = false;
+        btn.innerHTML = '☠ &nbsp; ENTER THE GRIMOIRE';
+        return;
+      }
+
+      showSuccess(isSetup ? '✓ Account created. Opening the Grimoire…' : '✓ Access granted. Opening the Grimoire…');
+      setTimeout(() => { window.location.href = '/'; }, 800);
+
+    } catch (err) {
+      showError('Network error: ' + err.message);
+      btn.disabled = false;
+      btn.innerHTML = '☠ &nbsp; ENTER THE GRIMOIRE';
+    }
+  }
+
+  // ── Utilities ─────────────────────────────────────────────────────────────
+  function showError(msg) {
+    const el = document.getElementById('error-box');
+    el.textContent = '⚠ ' + msg;
+    el.style.display = 'block';
+    document.getElementById('success-box').style.display = 'none';
+  }
+
+  function showSuccess(msg) {
+    const el = document.getElementById('success-box');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('error-box').style.display = 'none';
+  }
+
+  function hideMessages() {
+    document.getElementById('error-box').style.display   = 'none';
+    document.getElementById('success-box').style.display = 'none';
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submit();
+  });
+</script>
+</body>
+</html>

