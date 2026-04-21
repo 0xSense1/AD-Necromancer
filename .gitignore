@@ -10,4 +10,7 @@ desktop.ini
 
 # Go related
 vendor/
-go.sum
+
+# Grimoire runtime secrets — never commit these
+grimoire_creds.json
+grimoire_ai.json
