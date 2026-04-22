@@ -3,6 +3,7 @@ package bh
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Formatter converts collected ADData into BloodHound CE v6 JSON files.
@@ -262,14 +263,39 @@ func enrichCertTemplateProperties(n Node) Properties {
 func parseSPNTargets(spns []string) []SPNTarget {
 	var targets []SPNTarget
 	for _, spn := range spns {
+		// SPN format: ServiceClass/Host[:Port][:InstanceName]
+		// e.g. "MSSQLSvc/dc01.corp.local:1433" or "HTTP/webserver"
+		service, host := extractSPNParts(spn)
 		targets = append(targets, SPNTarget{
-			ComputerSID: spn,
+			// ComputerSID should be the SID of the target computer.
+			// We don't have it here without a secondary LDAP lookup, so leave
+			// empty — BloodHound CE accepts empty and creates a dangling-but-harmless
+			// node rather than a broken edge pointing at a non-existent SID.
+			ComputerSID: "",
 			Port:        0,
-			Service:     "Unknown",
+			Service:     service + "/" + host,
 		})
 	}
 	return targets
 }
+
+// extractSPNParts splits "ServiceClass/Host:Port" into (service, host).
+func extractSPNParts(spn string) (service, host string) {
+	slash := strings.Index(spn, "/")
+	if slash < 0 {
+		return spn, ""
+	}
+	service = spn[:slash]
+	rest := spn[slash+1:]
+	// strip :port or :instance suffix from host
+	if colon := strings.Index(rest, ":"); colon >= 0 {
+		host = rest[:colon]
+	} else {
+		host = rest
+	}
+	return service, host
+}
+
 
 func parseInt64(s string) int64 {
 	v := int64(0)

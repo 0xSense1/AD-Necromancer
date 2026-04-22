@@ -5,6 +5,7 @@ package ldap
 import (
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -74,8 +75,11 @@ func (c *Collector) CollectAll() (*bh.ADData, error) {
 
 	for _, step := range steps {
 		if err := step.fn(); err != nil {
-			// Non-fatal: log and continue to next object type
-			fmt.Printf("[!] LDAP collect %s: %v\n", step.name, err)
+			// Non-fatal: log and continue to next object type.
+			// c.jitter == stealth mode — suppress all console output in stealth.
+			if !c.jitter {
+				fmt.Printf("[!] LDAP collect %s: %v\n", step.name, err)
+			}
 		}
 		if c.jitter {
 			delay := jitterDelay(200, 800)
@@ -326,11 +330,8 @@ func parseWindowsTime(s string) int64 {
 	return unix
 }
 
-// jitterDelay returns a random duration between minMs and maxMs milliseconds.
+// jitterDelay returns a uniformly random duration between minMs and maxMs milliseconds.
 func jitterDelay(minMs, maxMs int) time.Duration {
-	// Simple LCG-based quick random to avoid importing math/rand
-	tick := time.Now().UnixNano()
-	spread := int64(maxMs - minMs)
-	ms := minMs + int(tick%spread)
+	ms := minMs + rand.Intn(maxMs-minMs)
 	return time.Duration(ms) * time.Millisecond
 }

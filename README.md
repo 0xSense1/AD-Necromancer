@@ -183,7 +183,11 @@ cd AD-Necromancer
 | Flag | Default | Description |
 |---|---|---|
 | `--port` | `8443` | HTTPS listen port |
-| `--api-key` | env | Anthropic API key (or `ANTHROPIC_API_KEY` env var) |
+| `--provider` | `claude` | Default AI provider if no `grimoire_ai.json` saved |
+| `--api-key` | env / saved | API key (overrides `grimoire_ai.json` and env var for one-shot runs) |
+| `--model` | provider default | Model name |
+
+> **Tip:** After first launch, configure the AI backend directly from the browser UI — click the **⚙ AI BACKEND** badge in the header. Provider, model, and API key are saved to `grimoire_ai.json` (0600 perms, gitignored) and hot-swapped without restart.
 
 ---
 
@@ -211,30 +215,287 @@ TCP:9389
 
 ---
 
-## 🛡️ EDR Evasion — How It Works
+## 🛡️ EDR Evasion — Deep Technical Breakdown
 
-### 1. XOR String Obfuscation (`internal/evasion/strings.go`)
-Every sensitive string — DLL names, `LDAP`, `ADWS`, `9389`, `EtwEventWrite`, API function names — is stored as pre-XOR'd byte literals in source. The plaintext never appears in the binary's string table.
+AD-Necromancer implements **five independent evasion layers** that execute at process startup (via `evasion.Bootstrap()`) before any AD collection begins. Each layer targets a different point in the EDR detection chain.
 
-### 2. PEB Walker (`internal/evasion/peb.go` + `peb_amd64.s`)
-Module enumeration via `GS:[0x60]` (PEB pointer, Plan 9 assembly) → `PEB_LDR_DATA` → `InLoadOrderModuleList`. Finds loaded DLLs without ever calling `GetModuleHandle` or `LoadLibrary`.
+### Detection Chain Overview
 
-### 3. EDR DLL Unhooking (`internal/evasion/unhook.go`)
-1. Locate hooked DLL in memory via PEB walk
-2. Read clean `.text` section from `C:\Windows\System32\<dll>.dll`
-3. Make `.text` writable via `NtProtectVirtualMemory` direct syscall
-4. `copy()` clean bytes over hooked bytes → hooks removed
-5. Restore original page protection
+```
+┌─────────────────────────────────────── EDR Detection Chain ────────────────────────────────────────┐
+│                                                                                                     │
+│  Static Analysis          │   Dynamic Analysis (Runtime)           │   Behavioural / Cloud          │
+│  ─────────────────────    │   ──────────────────────────────────   │   ─────────────────────────    │
+│  String scanning (YARA)   │   IAT hooks (GetProcAddress)           │   AMSI scanning                │
+│  Import table analysis    │   Inline hooks in ntdll .text          │   ETW telemetry events         │
+│  Hash-based blocklists    │   Syscall tracing / SSDT monitoring    │   Cloud ML: call sequences      │
+│                                                                                                     │
+│  Layer 1: XOR Obfuscation │   Layer 3: DLL Unhooking              │   Layer 4: ETW Patching        │
+│  Layer 6: garble -lits    │   Layer 5: Halos Gate Syscalls        │                                │
+│  Layer 2: PEB Walk (no    │   Layer 5: Direct SYSCALL asm stub    │                                │
+│           GetModHandle)   │                                        │                                │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
-Targets: `ntdll.dll`, `kernelbase.dll`, and any DLL matching EDR name patterns (`csfalcon`, `sentinel`, `edr`, `mde`, `elastic`, `cylance`, `cbdll`).
+### Execution Order
 
-### 4. ETW Patching (`internal/evasion/etw.go`)
-Writes `0xC3` (RET) to the first byte of `EtwEventWrite`, `EtwEventWriteFull`, and `NtTraceEvent` via direct syscall. Kills most user-mode telemetry before any collection begins.
+```
+Process Start
+    │
+    ├─► Bootstrap() ─────────────────────────────────────────────────────────────────────────────────
+    │       │
+    │       ├─ [1] XOR strings deobfuscated at first use (Obf() calls)
+    │       │        └─ No plaintext DLL/API names ever in binary's .rdata
+    │       │
+    │       ├─ [2] UnhookEDRs()  ──────────────────────────────────────────────────────────────────
+    │       │        │
+    │       │        ├─ WalkModules()          PEB GS:[0x60] → LDR_DATA_TABLE_ENTRY list
+    │       │        │                         (no GetModuleHandle, no LoadLibrary)
+    │       │        │
+    │       │        ├─ FindModule("ntdll")    locate in-memory ntdll base address
+    │       │        │
+    │       │        ├─ ReadFile(System32\ntdll.dll)   read clean on-disk .text section
+    │       │        │
+    │       │        ├─ NtProtectVirtualMemory()  ◄── direct syscall (Halos Gate SSN)
+    │       │        │     → PAGE_EXECUTE_READWRITE on in-memory .text
+    │       │        │
+    │       │        ├─ copy(memText, diskText)   overwrite hooked bytes with clean bytes
+    │       │        │
+    │       │        ├─ NtProtectVirtualMemory()  restore original page protection
+    │       │        │
+    │       │        └─ Repeat for: kernelbase.dll + any EDR DLL (csfalcon, sentinel, edr…)
+    │       │
+    │       └─ [3] PatchETW()  ───────────────────────────────────────────────────────────────────
+    │                │
+    │                ├─ resolveExport(ntdll, "EtwEventWrite")     export table walk (no GetProcAddress)
+    │                ├─ resolveExport(ntdll, "EtwEventWriteFull")
+    │                ├─ resolveExport(ntdll, "NtTraceEvent")
+    │                │
+    │                └─ patchFuncRET(va)
+    │                       ├─ NtProtectVirtualMemory()  → PAGE_EXECUTE_READWRITE
+    │                       ├─ *funcVA = 0xC3            write RET opcode → function is a no-op
+    │                       └─ NtProtectVirtualMemory()  → restore
+    │
+    └─► Collection proceeds through clean ntdll with ETW silenced
+```
 
-### 5. Halos Gate (`internal/evasion/syscall.go` + `peb_amd64.s`)
-- Walks the ntdll export table at runtime to extract syscall service numbers (SSNs)
-- If a stub is hooked (`JMP` at offset 0), scans neighbouring stubs ±N to recover the correct SSN
-- Invokes `SYSCALL` directly via Plan 9 assembly — no call through ntdll
+---
+
+### Layer 1 — XOR String Obfuscation (`evasion/strings.go`)
+
+**What EDRs do:** Static YARA rules and AV string scanning look for known-bad plaintext strings in the binary's `.rdata` section — `EtwEventWrite`, `ntdll.dll`, `9389`, `SharpHound`, etc.
+
+**What we do:** Every sensitive string is stored as a **pre-XOR'd byte literal** in source. The plaintext is never in the binary's string table. Strings are reconstructed at runtime only when `Obf()` is called.
+
+```
+Source:     SNtdll = []byte{0xC9, 0x4B, 0xF8, 0x3D, 0x84, 0x0A, 0xD2, 0x61, 0x36}
+Runtime:    Obf(SNtdll) → "ntdll.dll"
+```
+
+**Key design:** The 16-byte XOR key is assembled at `init()` time from two separate unexported arrays (`obfKeyLo`, `obfKeyHi`) stored in different memory regions — no single contiguous key block appears in the binary. For production DEFCON builds, `garble -literals` handles this at **compiler level**, making all string constants unrecoverable without execution.
+
+| Detection attempt | Result |
+|---|---|
+| `strings ./binary \| grep ntdll` | ❌ No match — only XOR'd bytes in `.rdata` |
+| YARA rule on `EtwEventWrite` | ❌ No match |
+| YARA rule on `9389` (ADWS port) | ❌ No match |
+| Static disassembly + key recovery | ⚠ Possible with effort (mitigated by `garble -literals` on full builds) |
+
+---
+
+### Layer 2 — PEB Walk (`evasion/peb.go` + `peb_amd64.s`)
+
+**What EDRs do:** Monitor calls to `GetModuleHandle`, `GetProcAddress`, `LoadLibrary` — the standard Win32 API for DLL/symbol resolution.
+
+**What we do:** Walk the **Process Environment Block** directly via AMD64 thread-local storage:
+
+```asm
+; peb_amd64.s
+MOVQ 0x60(GS), AX   ; GS:[0x60] = PEB* on Windows x64
+```
+
+From the PEB pointer we traverse `PEB_LDR_DATA → InLoadOrderModuleList → LDR_DATA_TABLE_ENTRY` to read every loaded DLL's base address and name — **zero Win32 calls**.
+
+```
+GS:[0x60]
+    └─► PEB
+         └─► PEB_LDR_DATA.InLoadOrderModuleList (circular doubly-linked list)
+                  ├─► LDR_DATA_TABLE_ENTRY → ntdll.dll    (DllBase, SizeOfImage)
+                  ├─► LDR_DATA_TABLE_ENTRY → kernel32.dll
+                  └─► LDR_DATA_TABLE_ENTRY → [EDR DLL].dll
+```
+
+| Detection attempt | Result |
+|---|---|
+| Hook on `GetModuleHandle` | ❌ Never called |
+| Hook on `LdrGetDllHandle` (ntdll) | ❌ Never called |
+| SSDT monitoring of module enumeration APIs | ❌ Not triggered |
+
+---
+
+### Layer 3 — EDR DLL Unhooking (`evasion/unhook.go`)
+
+**What EDRs do:** At process injection or DLL load time, EDRs overwrite the first bytes of sensitive Nt* functions in ntdll with a `JMP hook_dispatcher` instruction. Every call to `NtWriteFile`, `NtCreateProcess`, etc. is intercepted.
+
+**What we do:**
+
+```
+In-Memory ntdll .text (HOOKED):        Clean on-disk ntdll .text:
+  NtProtectVirtualMemory:                NtProtectVirtualMemory:
+    E9 XX XX XX XX  ← JMP [EDR]    vs    4C 8B D1        mov r10, rcx
+    ...                                  B8 50 00 00 00  mov eax, 0x50  ← SSN
+                                         ...
+```
+
+1. **Read clean copy** from `C:\Windows\System32\ntdll.dll` (on-disk pre-hook image)
+2. **Parse `.text` section** via manual PE header walk (no `ImageDirectoryEntryToData`)
+3. **Make writable** via `NtProtectVirtualMemory` — called via **direct syscall** (see Layer 5), bypassing the very hooks we're about to remove
+4. **`copy()`** clean bytes over the hooked in-memory `.text`
+5. **Restore protection** via another direct syscall
+
+Targets in order: `ntdll.dll` → `kernelbase.dll` → any loaded EDR DLL matching known name patterns.
+
+| EDR | Detection DLL pattern |
+|---|---|
+| CrowdStrike Falcon | `csfalcon` |
+| SentinelOne | `sentinel` |
+| Generic EDR | `edr` |
+| Microsoft Defender for Endpoint | `mde` |
+| Carbon Black | `cbdll` |
+| Elastic EDR | `elastic` |
+| Cylance | `cylance` |
+
+| Detection attempt | Result |
+|---|---|
+| Hook on `NtProtectVirtualMemory` (ntdll) | ❌ Bypassed via direct syscall before unhook |
+| IAT monitoring | ❌ Not in IAT |
+| Kernel minifilter on `ReadFile(ntdll.dll)` | ⚠ Kernel-level IRP visible — low-confidence telemetry |
+
+---
+
+### Layer 4 — ETW Patching (`evasion/etw.go`)
+
+**What EDRs do:** Windows Event Tracing (ETW) providers in ntdll emit telemetry on process activity — syscall names, heap allocations, .NET runtime events — which cloud-connected EDRs ingest for ML-based detection.
+
+**What we do:** Write a single `0xC3` (RET) byte to the first instruction of the three key ETW write functions. Any call to these functions now immediately returns without writing any event.
+
+```
+Before patch:     After patch:
+EtwEventWrite:    EtwEventWrite:
+  push rbp          C3  ← RET — function is a no-op
+  mov rbp, rsp
+  ...
+```
+
+Functions patched:
+- `EtwEventWrite` — primary ETW write path
+- `EtwEventWriteFull` — extended metadata variant
+- `NtTraceEvent` — kernel ETW bridge
+
+The patch itself uses `NtProtectVirtualMemory` via **direct syscall** (after unhooking) so the protection change isn't visible to ntdll hooks.
+
+| Detection attempt | Result |
+|---|---|
+| ETW `Microsoft-Windows-Threat-Intelligence` session | ❌ Silenced |
+| AMSI ETW provider events | ❌ Silenced |
+| Kernel ETW (WPP, EtwTi) | ⚠ Kernel providers are unaffected — userland ETW only |
+
+---
+
+### Layer 5 — Halos Gate Direct Syscalls (`evasion/syscall.go` + `peb_amd64.s`)
+
+**What EDRs do:** Hook Nt* stubs in ntdll with `JMP` patches. Every time your code calls `NtProtectVirtualMemory`, the EDR intercepts it in userland before the CPU ever executes `SYSCALL`.
+
+**What we do — Hell's Gate + Halos Gate:**
+
+**Step 1 — Find the SSN (Syscall Service Number):**
+```
+ntdll export table → NtProtectVirtualMemory VA
+    │
+    ├─ Byte at VA == 0x4C? (mov r10, rcx)  ← clean stub
+    │       └─► Read SSN from bytes [VA+4..VA+7]  ─ Hell's Gate
+    │
+    └─ Byte at VA == 0xE9? (JMP) ← hooked! ─ Halos Gate fallback
+            └─► Scan neighbouring stubs ±N × 32 bytes
+                    ├─ Each unhooked neighbour has SSN = target_SSN ± offset
+                    └─► Recover correct SSN arithmetically
+```
+
+**Step 2 — Execute SYSCALL directly (Plan 9 assembly):**
+```asm
+; peb_amd64.s — doSyscall()
+MOVQ ssn,   AX       ; syscall number
+MOVQ a1,    R10      ; arg1 (R10 not RCX — SYSCALL clobbers RCX)
+MOVQ a2,    DX       ; arg2
+MOVQ a3,    R8       ; arg3
+MOVQ a4,    R9       ; arg4
+MOVQ a5,    R11
+MOVQ R11,   0x28(SP) ; arg5 → [rsp+0x28] (Windows kernel reads from stack)
+MOVQ a6,    R12
+MOVQ R12,   0x30(SP) ; arg6 → [rsp+0x30]
+SYSCALL              ; CPU transitions to kernel — no ntdll involved
+```
+
+The CPU jumps directly from our code to the kernel via the `SYSCALL` instruction. The EDR's userland hook in ntdll is **never reached**.
+
+```
+Normal call path (hooked):          Our path (Halos Gate):
+  our code                            our code
+    │                                   │
+    ▼                                   │  (skip)
+  ntdll!NtProtectVirtualMemory          │
+    │ E9 → JMP [EDR hook]               │
+    ▼                                   ▼
+  [EDR intercept]                    SYSCALL ──► Windows Kernel (NT layer)
+    │
+    ▼
+  Windows Kernel (NT layer)
+```
+
+| Detection attempt | Result |
+|---|---|
+| Hook on `NtProtectVirtualMemory` in ntdll | ❌ Never called through ntdll |
+| `GetProcAddress` for SSN resolution | ❌ Export table walked via PEB (Layer 2) |
+| All ntdll Nt* hooks simultaneously hooked | ⚠ Halos Gate uses neighbour stubs — survives up to 10 consecutive hooks |
+
+---
+
+### Bootstrap Order — Why Sequence Matters
+
+```
+Bootstrap()
+  Step 1: UnhookEDRs()
+          └─ Uses direct syscall (Halos Gate) to call NtProtectVirtualMemory
+             BEFORE unhooking — so the syscall bypasses the hook that's still in place.
+             We don't need ntdll clean to do this step.
+
+  Step 2: PatchETW()
+          └─ Now running with clean ntdll. NtProtectVirtualMemory calls used for
+             ETW patching go through the restored clean stub path.
+             ETW events from our memory writes are suppressed before collection starts.
+
+  Step 3: Collection begins
+          └─ ntdll clean, ETW silent, syscalls direct.
+```
+
+### Production Build — `garble -literals`
+
+For DEFCON / operational builds, compile with:
+
+```bash
+go install mvdan.cc/garble@latest
+
+garble -seed=random -literals -tiny build \
+  -ldflags "-s -w" \
+  ./cmd/ad-necromancer/
+```
+
+| `garble` flag | Effect |
+|---|---|
+| `-seed=random` | Different symbol name mangling on every build (breaks hash blocklists) |
+| `-literals` | Encrypts **all string constants** at compiler level — XOR approach becomes a second layer |
+| `-tiny` | Strips debug info, type names, method names |
+| `-ldflags -s -w` | Strip symbol table + DWARF debug info |
 
 ---
 
