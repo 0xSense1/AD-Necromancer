@@ -10,12 +10,16 @@ package adws
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"ad-necromancer/internal/bh"
@@ -552,6 +556,17 @@ const (
 	nsADDAT = "http://schemas.microsoft.com/2008/1/ActiveDirectory/Data"
 )
 
+// msgCounter generates unique WS-Addressing MessageID values per session.
+// WS-Addressing requires each request to carry a unique MessageID — reusing
+// the same ID across paginated Pull requests can trigger server-side
+// deduplication, returning only the first page repeatedly.
+var msgCounter uint64
+
+func nextMsgID() string {
+	n := atomic.AddUint64(&msgCounter, 1)
+	return fmt.Sprintf("urn:uuid:necromancer-%d-%d", time.Now().UnixNano(), n)
+}
+
 // wsEnumerate sends Enumerate and returns the EnumerationContext handle.
 func (c *Client) wsEnumerate(conn net.Conn, baseDN, filter string, attrs []string) (string, error) {
 	attrXML := buildAttrList(attrs)
@@ -565,7 +580,7 @@ func (c *Client) wsEnumerate(conn net.Conn, baseDN, filter string, attrs []strin
   <s:Header>
     <a:Action s:mustUnderstand="1">%s</a:Action>
     <a:To s:mustUnderstand="1">%s</a:To>
-    <a:MessageID>urn:uuid:necromancer-enum-01</a:MessageID>
+    <a:MessageID>%s</a:MessageID>
   </s:Header>
   <s:Body>
     <wsen:Enumerate>
@@ -581,6 +596,7 @@ func (c *Client) wsEnumerate(conn net.Conn, baseDN, filter string, attrs []strin
 		nsSOAP, nsWSA, nsWSEN, nsAD, nsADDAT,
 		actionEnumerate,
 		c.viaEnum,
+		nextMsgID(),
 		xmlEscape(filter),
 		attrXML,
 		xmlEscape(baseDN),
@@ -612,7 +628,7 @@ func (c *Client) wsPull(conn net.Conn, enumCtx string, maxElements int) ([]map[s
   <s:Header>
     <a:Action s:mustUnderstand="1">%s</a:Action>
     <a:To s:mustUnderstand="1">%s</a:To>
-    <a:MessageID>urn:uuid:necromancer-pull-01</a:MessageID>
+    <a:MessageID>%s</a:MessageID>
   </s:Header>
   <s:Body>
     <wsen:Pull>
@@ -624,6 +640,7 @@ func (c *Client) wsPull(conn net.Conn, enumCtx string, maxElements int) ([]map[s
 		nsSOAP, nsWSA, nsWSEN,
 		actionPull,
 		c.viaEnum,
+		nextMsgID(),
 		xmlEscape(enumCtx),
 		maxElements,
 	)
@@ -956,12 +973,23 @@ func xmlEscape(s string) string {
 // ── Node conversion ──────────────────────────────────────────────────────────
 
 // adwsItemsToNodes converts raw ADWS attribute maps into bh.Node objects.
+// ADWS returns objectSid as a base64-encoded binary blob; we decode it and
+// convert to the Windows S-1-5-21-... string format for BloodHound compatibility.
 func adwsItemsToNodes(items []map[string][]string, domain string) []bh.Node {
 	nodes := make([]bh.Node, 0, len(items))
 	for _, item := range items {
-		sid := firstVal(item, "objectSid")
+		// objectSid from ADWS is base64(binary SID) — must decode + format
+		sid := adwsDecodeSID(firstVal(item, "objectSid"))
 		if sid == "" {
-			sid = firstVal(item, "objectGUID")
+			// Fallback to objectGUID (also base64 from ADWS)
+			guidRaw := firstVal(item, "objectGUID")
+			if guidRaw != "" {
+				if b, err := base64.StdEncoding.DecodeString(guidRaw); err == nil {
+					sid = strings.ToUpper(hex.EncodeToString(b))
+				} else {
+					sid = guidRaw
+				}
+			}
 		}
 		if sid == "" {
 			sid = firstVal(item, "distinguishedName")
@@ -998,6 +1026,41 @@ func adwsItemsToNodes(items []map[string][]string, domain string) []bh.Node {
 	return nodes
 }
 
+// adwsDecodeSID decodes a base64-encoded Windows binary SID (as returned by ADWS XML)
+// and converts it to the standard S-R-X-Y-... string format.
+func adwsDecodeSID(b64 string) string {
+	if b64 == "" {
+		return ""
+	}
+	b, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		// Try URL-safe base64 variant
+		b, err = base64.URLEncoding.DecodeString(b64)
+		if err != nil {
+			return ""
+		}
+	}
+	// Binary SID layout: revision(1) subAuthCount(1) authority(6) subAuthorities(4 each)
+	if len(b) < 8 {
+		return ""
+	}
+	revision := b[0]
+	subAuthCount := int(b[1])
+	var authority int64
+	for i := 2; i < 8; i++ {
+		authority = (authority << 8) | int64(b[i])
+	}
+	sid := fmt.Sprintf("S-%d-%d", revision, authority)
+	for i := 0; i < subAuthCount; i++ {
+		if 8+i*4+4 > len(b) {
+			break
+		}
+		sub := binary.LittleEndian.Uint32(b[8+i*4:])
+		sid += fmt.Sprintf("-%d", sub)
+	}
+	return sid
+}
+
 // ── Misc helpers ─────────────────────────────────────────────────────────────
 
 // domainToDN converts a domain FQDN to an LDAP DN.
@@ -1026,9 +1089,7 @@ func truncate(s string, max int) string {
 }
 
 func jitter(minMs, maxMs int) {
-	tick := time.Now().UnixNano()
-	spread := int64(maxMs - minMs)
-	ms := minMs + int(tick%spread)
+	ms := minMs + rand.Intn(maxMs-minMs)
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 }
 
