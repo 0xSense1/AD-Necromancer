@@ -69,7 +69,8 @@ func Bootstrap(noUnhook, noETW bool) {
 		UnhookEDRs()
 	}
 
-	// 2. Patch ETW (after unhooking, so our patch isn't immediately re-hooked)
+	// 2. Patch ETW after unhooking, so NtProtectVirtualMemory used in patchFuncRET
+	//    goes through the clean (unhooked) syscall path rather than the EDR hook.
 	if !noETW {
 		PatchETW()
 	}

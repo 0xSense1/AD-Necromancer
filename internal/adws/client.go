@@ -916,6 +916,9 @@ func extractSecurityToken(data []byte) ([]byte, error) {
 }
 
 // buildSecuritySOAP creates a minimal SOAP envelope carrying an NTLM Negotiate token.
+// Each call generates a unique WS-Addressing MessageID to satisfy strict deduplication
+// checks on some Windows DCs (reusing the same ID across Negotiate/Authenticate legs
+// can cause the Authenticate to be rejected as a replay).
 func buildSecuritySOAP(tokenB64, to, action string) []byte {
 	const wsseNS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
 	const wsuNS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
@@ -926,7 +929,7 @@ func buildSecuritySOAP(tokenB64, to, action string) []byte {
   <s:Header>
     <a:Action s:mustUnderstand="1">%s</a:Action>
     <a:To s:mustUnderstand="1">%s</a:To>
-    <a:MessageID>urn:uuid:necromancer-auth-01</a:MessageID>
+    <a:MessageID>%s</a:MessageID>
     <wsse:Security xmlns:wsse="%s" xmlns:wsu="%s" s:mustUnderstand="1">
       <wsse:BinarySecurityToken
         ValueType="%s"
@@ -939,6 +942,7 @@ func buildSecuritySOAP(tokenB64, to, action string) []byte {
 		nsSOAP, nsWSA,
 		xmlEscape(action),
 		xmlEscape(to),
+		nextMsgID(),
 		wsseNS, wsuNS,
 		ntlmType,
 		tokenB64,
