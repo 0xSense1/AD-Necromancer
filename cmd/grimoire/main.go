@@ -1124,6 +1124,14 @@ func decryptAndParse(encData, key []byte) (*GraphData, error) {
 	return parseZip(plain)
 }
 
+// parseZip parses a decrypted BloodHound CE v6 zip into a GraphData.
+// Uses two passes so edges are only emitted when both endpoints are known nodes:
+//  1. Collect all valid objects and build a nodeID set.
+//  2. Emit edges — skip any whose source or target is not in nodeIDs.
+//
+// This prevents Cytoscape from crashing with "nonexistent source/target" on
+// Members/ACEs that contain DNs, cross-domain SIDs, or deleted-object refs
+// with no corresponding node in this dataset.
 func parseZip(data []byte) (*GraphData, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -1143,6 +1151,13 @@ func parseZip(data []byte) (*GraphData, error) {
 
 	seen := make(map[string]bool)
 
+	// --- Pass 1: read every file, collect valid objects ---
+	type rawEntry struct {
+		obj     bhObject
+		objType string
+	}
+	var entries []rawEntry
+
 	for _, f := range zr.File {
 		base := strings.ToLower(f.Name)
 		if i := strings.LastIndexByte(base, '/'); i >= 0 {
@@ -1152,7 +1167,6 @@ func parseZip(data []byte) (*GraphData, error) {
 		if !ok {
 			continue
 		}
-
 		rc, err := f.Open()
 		if err != nil {
 			continue
@@ -1162,56 +1176,67 @@ func parseZip(data []byte) (*GraphData, error) {
 		if err != nil {
 			continue
 		}
-
 		var bhf bhFile
 		if err := json.Unmarshal(fb, &bhf); err != nil {
 			continue
 		}
-
 		for _, raw := range bhf.Data {
 			var obj bhObject
 			if err := json.Unmarshal(raw, &obj); err != nil || obj.IsDeleted || obj.ObjectIdentifier == "" || seen[obj.ObjectIdentifier] {
 				continue
 			}
 			seen[obj.ObjectIdentifier] = true
+			entries = append(entries, rawEntry{obj, objType})
+		}
+	}
 
-			label := obj.Properties.Name
-			if label == "" {
-				label = obj.ObjectIdentifier
-			}
+	// --- Pass 2: build nodes + index of known node IDs ---
+	nodeIDs := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		obj := e.obj
+		label := obj.Properties.Name
+		if label == "" {
+			label = obj.ObjectIdentifier
+		}
+		graph.Nodes = append(graph.Nodes, GraphNode{
+			ID:    obj.ObjectIdentifier,
+			Label: label,
+			Type:  e.objType,
+			Properties: map[string]string{
+				"domain":      obj.Properties.Domain,
+				"admincount":  boolStr(obj.Properties.AdminCount),
+				"highvalue":   boolStr(obj.Properties.HighValue),
+				"enabled":     boolStr(obj.Properties.Enabled),
+				"description": obj.Properties.Description,
+				"sam":         obj.Properties.SAMAccountName,
+				"os":          obj.Properties.OperatingSystem,
+			},
+		})
+		nodeIDs[obj.ObjectIdentifier] = true
+	}
 
-			graph.Nodes = append(graph.Nodes, GraphNode{
-				ID:    obj.ObjectIdentifier,
-				Label: label,
-				Type:  objType,
-				Properties: map[string]string{
-					"domain": obj.Properties.Domain, "admincount": boolStr(obj.Properties.AdminCount),
-					"highvalue": boolStr(obj.Properties.HighValue), "enabled": boolStr(obj.Properties.Enabled),
-					"description": obj.Properties.Description, "sam": obj.Properties.SAMAccountName,
-					"os": obj.Properties.OperatingSystem,
-				},
-			})
+	// --- Pass 3: emit edges — only when both endpoints exist in nodeIDs ---
+	addEdge := func(src, tgt, rel string) {
+		if src != "" && tgt != "" && src != tgt && nodeIDs[src] && nodeIDs[tgt] {
+			graph.Edges = append(graph.Edges, GraphEdge{Source: src, Target: tgt, Relation: rel})
+		}
+	}
 
-			sid := obj.ObjectIdentifier
-			for _, m := range obj.Members {
-				if m.ObjectIdentifier != "" && m.ObjectIdentifier != sid {
-					graph.Edges = append(graph.Edges, GraphEdge{Source: m.ObjectIdentifier, Target: sid, Relation: "MemberOf"})
-				}
-			}
-			for _, d := range obj.AllowedToDelegate {
-				if d.ObjectIdentifier != "" {
-					graph.Edges = append(graph.Edges, GraphEdge{Source: sid, Target: d.ObjectIdentifier, Relation: "AllowedToDelegate"})
-				}
-			}
-			for _, a := range obj.AllowedToAct {
-				if a.ObjectIdentifier != "" {
-					graph.Edges = append(graph.Edges, GraphEdge{Source: a.ObjectIdentifier, Target: sid, Relation: "AllowedToActOnBehalfOf"})
-				}
-			}
-			for _, ace := range obj.Aces {
-				if !ace.IsInherited && ace.PrincipalSID != "" && isHighValueRight(ace.RightName) {
-					graph.Edges = append(graph.Edges, GraphEdge{Source: ace.PrincipalSID, Target: sid, Relation: ace.RightName})
-				}
+	for _, e := range entries {
+		obj := e.obj
+		sid := obj.ObjectIdentifier
+		for _, m := range obj.Members {
+			addEdge(m.ObjectIdentifier, sid, "MemberOf")
+		}
+		for _, d := range obj.AllowedToDelegate {
+			addEdge(sid, d.ObjectIdentifier, "AllowedToDelegate")
+		}
+		for _, a := range obj.AllowedToAct {
+			addEdge(a.ObjectIdentifier, sid, "AllowedToActOnBehalfOf")
+		}
+		for _, ace := range obj.Aces {
+			if !ace.IsInherited && ace.PrincipalSID != "" && isHighValueRight(ace.RightName) {
+				addEdge(ace.PrincipalSID, sid, ace.RightName)
 			}
 		}
 	}
