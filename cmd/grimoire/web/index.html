@@ -683,11 +683,6 @@ or click <strong style="color:#9b59b6">⚡ OFFLINE UPLOAD</strong> to load exist
       </div>
     </div>
 
-    <!-- Model name -->
-    <div class="form-group">
-      <label>MODEL NAME <span style="color:var(--text-dim)">(leave blank for default)</span></label>
-      <input type="text" id="ai-model" placeholder="e.g. claude-opus-4-5, gpt-4o, llama3…">
-    </div>
 
     <!-- API Key -->
     <div class="form-group" id="ai-key-group">
@@ -1284,7 +1279,7 @@ async function openAIModal() {
       c.classList.toggle('selected', c.dataset.provider === selectedProvider);
     });
 
-    document.getElementById('ai-model').value    = data.model    || '';
+    // model is always set by backend default — no model field in UI
     document.getElementById('ai-endpoint').value = data.endpoint || '';
     document.getElementById('ai-key').value = ''; // Never pre-fill key
 
@@ -1352,14 +1347,13 @@ async function saveAIConfig() {
 
   const provider = selectedProvider;
   const apiKey   = document.getElementById('ai-key').value.trim();
-  const model    = document.getElementById('ai-model').value.trim();
   const endpoint = document.getElementById('ai-endpoint').value.trim();
 
   try {
     const res = await fetch('/api/ai-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, api_key: apiKey, model, endpoint }),
+      body: JSON.stringify({ provider, api_key: apiKey, model: '', endpoint }),
     });
     const data = await res.json();
 
