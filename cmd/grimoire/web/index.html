@@ -554,8 +554,6 @@
     <div id="cy"></div>
 
     <div id="graph-overlay">
-      <input id="graph-search" type="text" placeholder="🔍 Search entities..."
-             oninput="searchGraph(this.value)">
       <div id="graph-stats">Nodes: 0 &nbsp;|&nbsp; Edges: 0</div>
     </div>
 
@@ -1059,6 +1057,9 @@ function highlightPath(pathStr) {
   const parts = pathStr.split(/→|->/);
   const nodeNames = parts.map(p => {
     let name = p.replace(/\[.*?\]/g, '').trim();
+    name = name.replace(/^[-*0-9.]+\s*/, '');
+    name = name.replace(/\*/g, '');
+    name = name.replace(/\$$/, '');
     return name.toLowerCase();
   }).filter(n => n);
 
@@ -1068,7 +1069,9 @@ function highlightPath(pathStr) {
     const fl = (n.data('fullLabel')||'').toLowerCase();
     const sl = (n.data('label')||'').toLowerCase();
     const sam = (n.data('sam')||'').toLowerCase();
-    return nodeNames.some(nn => fl.includes(nn) || nn.includes(fl) || sl === nn || sam === nn);
+    return nodeNames.some(nn => 
+      fl.includes(nn) || nn.includes(fl) || sl === nn || sam === nn || fl === nn + '$' || sam === nn + '$'
+    );
   });
   toHighlight = toHighlight.union(nodes);
 
@@ -1081,21 +1084,6 @@ function highlightPath(pathStr) {
   if (toHighlight.length > 0) {
     cy.animate({ fit: { eles: toHighlight, padding: 50 }, duration: 380 });
   }
-}
-
-function searchGraph(q) {
-  if (!cy) return;
-  if (!q) { clearHighlight(); return; }
-  const ql = q.toLowerCase();
-  cy.elements().addClass('dimmed').removeClass('highlighted');
-  const hits = cy.nodes().filter(n =>
-    (n.data('fullLabel')||'').toLowerCase().includes(ql) ||
-    (n.data('sam')||'').toLowerCase().includes(ql) ||
-    (n.data('token')||'').toLowerCase().includes(ql)
-  );
-  hits.removeClass('dimmed').addClass('highlighted');
-  if (hits.length > 0 && hits.length < 60)
-    cy.animate({ fit: { eles: hits, padding: 50 }, duration: 380 });
 }
 
 // ── Tokenization ──────────────────────────────────────────────────────────────
@@ -1269,9 +1257,19 @@ function formatAnalysis(text) {
 
     // Make paths clickable
     if (safe.includes('→') || safe.includes('-&gt;')) {
-      safe = safe.replace(/(?:[A-Za-z0-9_$-]+(?:\s+)?(?:→|-&gt;)(?:\s+)?(?:\[[^\]]+\](?:\s+)?(?:→|-&gt;)(?:\s+)?)?)+[A-Za-z0-9_$-]+/g, match => {
-        return `<span class="path-link" style="color:#ffd700; cursor:pointer; text-decoration:underline;" onclick="highlightPath(this.innerText)">${match}</span>`;
-      });
+      let pathStart = 0;
+      const t = safe.trim();
+      if (t.startsWith('- ') || t.startsWith('* ')) {
+        pathStart = safe.indexOf(t.charAt(0)) + 2;
+      } else if (/^[0-9]+\.\s/.test(t)) {
+        const match = t.match(/^[0-9]+\.\s/)[0];
+        pathStart = safe.indexOf(match) + match.length;
+      }
+      
+      const prefix = safe.substring(0, pathStart);
+      const pathContent = safe.substring(pathStart);
+      
+      safe = `${prefix}<span class="path-link" style="color:#ffd700; cursor:pointer; text-decoration:underline;" onclick="highlightPath(this.innerText)">${pathContent}</span>`;
     }
 
     // **bold** (after escaping, ** are still literal)
