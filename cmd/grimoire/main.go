@@ -1281,7 +1281,7 @@ func buildSummary(g *GraphData) string {
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "=== TOKENIZED AD ENVIRONMENT ===\n")
+	fmt.Fprintf(&sb, "=== AD ENVIRONMENT SUMMARY ===\n")
 	fmt.Fprintf(&sb, "Users:%d Groups:%d Computers:%d Domains:%d GPOs:%d OUs:%d CertTemplates:%d EnterpriseCAs:%d | Relationships:%d\n\n",
 		counts["User"], counts["Group"], counts["Computer"], counts["Domain"],
 		counts["GPO"], counts["OU"], counts["CertTemplate"], counts["EnterpriseCA"], len(g.Edges))
@@ -1290,7 +1290,7 @@ func buildSummary(g *GraphData) string {
 	found := 0
 	for _, n := range g.Nodes {
 		if n.Properties["admincount"] == "true" || n.Properties["highvalue"] == "true" {
-			tok := g.TokenMap[n.Label]
+			tok := n.Label
 			stale := ""
 			if n.Properties["enabled"] == "false" {
 				stale = " [STALE-DISABLED]"
@@ -1309,8 +1309,8 @@ func buildSummary(g *GraphData) string {
 			fmt.Fprintf(&sb, "...and %d more\n", len(g.Edges)-60)
 			break
 		}
-		s := g.TokenMap[labelByID[e.Source]]
-		t := g.TokenMap[labelByID[e.Target]]
+		s := labelByID[e.Source]
+		t := labelByID[e.Target]
 		if s == "" { s = e.Source }
 		if t == "" { t = e.Target }
 		fmt.Fprintf(&sb, "- %s →[%s]→ %s\n", s, e.Relation, t)
