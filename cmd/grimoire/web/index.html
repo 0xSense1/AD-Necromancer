@@ -790,17 +790,19 @@ function loadGraph(data) {
 
   enableChat();
   initCytoscape(data);
-
-  if (!analysisReady) {
-    analysisReady = true;
-    triggerInitialAnalysis();
-  }
 }
 
 function enableChat() {
   document.getElementById('chat-input').disabled = false;
   document.getElementById('chat-send').disabled  = false;
-  document.getElementById('re-analyze-btn').style.display = 'block';
+  
+  const reAnalyzeBtn = document.getElementById('re-analyze-btn');
+  reAnalyzeBtn.style.display = 'block';
+  
+  if (!analysisReady) {
+    reAnalyzeBtn.textContent = '☠ ANALYZE ENVIRONMENT';
+    document.getElementById('analysis-content').innerHTML = '<span class="placeholder" style="color:#2ecc71">✓ Data ingested and tokenized.<br><br>Review the graph, then click <strong>ANALYZE ENVIRONMENT</strong> to summon the AI.</span>';
+  }
 }
 
 // ── Cytoscape ─────────────────────────────────────────────────────────────────
@@ -838,21 +840,26 @@ function initCytoscape(data) {
     }
   }
 
+  const layoutOpts = nodes.length > 800 ? {
+    name: 'concentric',
+    minNodeSpacing: 50,
+  } : {
+    name: 'cose',
+    animate: false,
+    randomize: true,
+    nodeRepulsion: 9000,
+    idealEdgeLength: 110,
+    gravity: 0.3,
+    numIter: 3500,
+  };
+
   if (cy) cy.destroy();
 
   cy = cytoscape({
     container: document.getElementById('cy'),
     elements:  [...nodes, ...edges],
     style:     buildStyle(),
-    layout: {
-      name: 'cose',
-      animate: false,
-      randomize: true,
-      nodeRepulsion: 9000,
-      idealEdgeLength: 110,
-      gravity: 0.3,
-      numIter: 3500,
-    },
+    layout:    layoutOpts,
     wheelSensitivity: 0.3,
     minZoom: 0.04,
     maxZoom: 6,
@@ -1135,6 +1142,9 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
 
 // ── Initial Analysis ──────────────────────────────────────────────────────────
 async function triggerInitialAnalysis() {
+  analysisReady = true;
+  document.getElementById('re-analyze-btn').textContent = '↻ RE-ANALYZE';
+  
   const el = document.getElementById('analysis-content');
   el.innerHTML = '<span class="spin">⟳</span>  Summoning the Necromancer AI…';
 
@@ -1256,8 +1266,7 @@ async function submitOfflineLoad() {
   try {
     const res = await fetch('/api/offline-load', { method:'POST', body:fd });
     if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    loadGraph(data);
+    // Let SSE handle the graph loading to avoid double-processing
     closeModal();
   } catch (err) {
     errEl.textContent = `⚠ ${err.message}`;

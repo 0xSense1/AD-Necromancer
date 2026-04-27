@@ -770,7 +770,7 @@ func handleOfflineLoad(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[+] Offline load: %d nodes, %d edges", len(graph.Nodes), len(graph.Edges))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(graph)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
