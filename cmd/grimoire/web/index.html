@@ -554,6 +554,7 @@
     <div id="cy"></div>
 
     <div id="graph-overlay">
+      <button class="btn btn-ghost" style="position:absolute;top:14px;left:14px;z-index:99;font-size:10px;padding:4px 8px;" onclick="resetGraph()">⎌ CLEAR GRAPH</button>
       <div id="graph-stats">Nodes: 0 &nbsp;|&nbsp; Edges: 0</div>
     </div>
 
@@ -726,6 +727,8 @@ let selectedNode  = null;
 let analysisReady = false;
 let edgeIdx       = 0;
 let selectedProvider = 'claude';
+let globalNodes   = [];
+let globalEdges   = [];
 
 const MAX_CHAT_HISTORY = 40;
 
@@ -813,7 +816,7 @@ function enableChat() {
 function initCytoscape(data) {
   edgeIdx = 0;
 
-  const nodes = data.nodes.map(n => ({
+  globalNodes = data.nodes.map(n => ({
     group: 'nodes',
     data: {
       id:          n.id,
@@ -831,39 +834,25 @@ function initCytoscape(data) {
     }
   }));
 
-  // Deduplicate edges by source+relation+target
   const edgeSeen = new Set();
-  const edges = [];
+  globalEdges = [];
   for (const e of data.edges) {
     const key = `${e.source}|${e.relation}|${e.target}`;
     if (!edgeSeen.has(key)) {
       edgeSeen.add(key);
-      edges.push({ group:'edges', data:{
+      globalEdges.push({ group:'edges', data:{
         id: `e${edgeIdx++}`, source: e.source, target: e.target, label: e.relation
       }});
     }
   }
 
-  const layoutOpts = nodes.length > 800 ? {
-    name: 'concentric',
-    minNodeSpacing: 50,
-  } : {
-    name: 'cose',
-    animate: false,
-    randomize: true,
-    nodeRepulsion: 9000,
-    idealEdgeLength: 110,
-    gravity: 0.3,
-    numIter: 3500,
-  };
-
   if (cy) cy.destroy();
 
   cy = cytoscape({
     container: document.getElementById('cy'),
-    elements:  [...nodes, ...edges],
+    elements:  [],
     style:     buildStyle(),
-    layout:    layoutOpts,
+    layout:    { name: 'preset' },
     wheelSensitivity: 0.3,
     minZoom: 0.04,
     maxZoom: 6,
@@ -1051,8 +1040,7 @@ function investigateEdge() {
 
 function highlightPath(pathStr) {
   if (!cy) return;
-  clearHighlight();
-  cy.elements().addClass('dimmed');
+  resetGraph();
   
   const parts = pathStr.split(/→|->/);
   const nodeNames = parts.map(p => {
@@ -1063,27 +1051,42 @@ function highlightPath(pathStr) {
     return name.toLowerCase();
   }).filter(n => n);
 
-  let toHighlight = cy.collection();
-  
-  const nodes = cy.nodes().filter(n => {
-    const fl = (n.data('fullLabel')||'').toLowerCase();
-    const sl = (n.data('label')||'').toLowerCase();
-    const sam = (n.data('sam')||'').toLowerCase();
+  const matchedNodes = globalNodes.filter(n => {
+    const fl = (n.data.fullLabel||'').toLowerCase();
+    const sl = (n.data.label||'').toLowerCase();
+    const sam = (n.data.sam||'').toLowerCase();
     return nodeNames.some(nn => 
       fl.includes(nn) || nn.includes(fl) || sl === nn || sam === nn || fl === nn + '$' || sam === nn + '$'
     );
   });
-  toHighlight = toHighlight.union(nodes);
 
-  const edges = cy.edges().filter(e => {
-    return toHighlight.contains(e.source()) && toHighlight.contains(e.target());
+  const nodeIds = new Set(matchedNodes.map(n => n.data.id));
+
+  const matchedEdges = globalEdges.filter(e => {
+    return nodeIds.has(e.data.source) && nodeIds.has(e.data.target);
   });
-  toHighlight = toHighlight.union(edges);
 
-  toHighlight.removeClass('dimmed').addClass('highlighted');
-  if (toHighlight.length > 0) {
-    cy.animate({ fit: { eles: toHighlight, padding: 50 }, duration: 380 });
+  cy.add([...matchedNodes, ...matchedEdges]);
+  cy.elements().addClass('highlighted');
+
+  if (cy.elements().length > 0) {
+    cy.layout({
+      name: 'breadthfirst',
+      directed: true,
+      spacingFactor: 1.5,
+      animate: true,
+      animationDuration: 380,
+    }).run();
   }
+}
+
+function resetGraph() {
+  if (!cy) return;
+  cy.elements().remove();
+  document.getElementById('node-info').style.display = 'none';
+  document.getElementById('edge-info').style.display = 'none';
+  selectedNode = null;
+  selectedEdge = null;
 }
 
 // ── Tokenization ──────────────────────────────────────────────────────────────
