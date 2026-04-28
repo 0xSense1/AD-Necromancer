@@ -192,8 +192,8 @@
     #graph-stats {
       background: rgba(15,17,23,.82);
       border: 1px solid var(--border);
-      padding: 5px 10px;
-      font-size: 11px;
+      padding: 8px 12px;
+      font-size: 14px;
       color: var(--text-dim);
     }
 
@@ -554,8 +554,8 @@
     <div id="cy"></div>
 
     <div id="graph-overlay">
-      <button class="btn btn-ghost" style="position:absolute;top:14px;left:14px;z-index:99;font-size:10px;padding:4px 8px;" onclick="resetGraph()">⎌ CLEAR GRAPH</button>
       <div id="graph-stats">Nodes: 0 &nbsp;|&nbsp; Edges: 0</div>
+      <button class="btn btn-ghost" style="font-size:12px;padding:6px 10px;text-align:left;width:fit-content;" onclick="resetGraph()">⎌ CLEAR GRAPH</button>
     </div>
 
     <!-- Node info card -->
@@ -813,6 +813,20 @@ function enableChat() {
 }
 
 // ── Cytoscape ─────────────────────────────────────────────────────────────────
+function getIcon(type) {
+  switch(type) {
+    case 'Computer': return '💻 ';
+    case 'User': return '👤 ';
+    case 'Group': return '👥 ';
+    case 'Domain': return '🌐 ';
+    case 'GPO': return '📜 ';
+    case 'OU': return '📁 ';
+    case 'CertTemplate': return '🔖 ';
+    case 'EnterpriseCA': return '🏛 ';
+    default: return '';
+  }
+}
+
 function initCytoscape(data) {
   edgeIdx = 0;
 
@@ -820,8 +834,9 @@ function initCytoscape(data) {
     group: 'nodes',
     data: {
       id:          n.id,
-      label:       shortLabel(n.label),
-      fullLabel:   n.label,
+      label:       shortLabel(realLabel(n.label)),
+      displayLabel: getIcon(n.type) + shortLabel(realLabel(n.label)),
+      fullLabel:   realLabel(n.label),
       token:       n.properties?.token    || '',
       type:        n.type,
       domain:      n.properties?.domain   || '',
@@ -897,7 +912,7 @@ function buildStyle() {
         'background-color': '#1e1830',
         'border-width': 2,
         'border-color': '#5a3070',
-        'label': 'data(label)',
+        'label': 'data(displayLabel)',
         'color': '#b0b0c0',
         'font-size': '9px',
         'font-family': '"Share Tech Mono", monospace',
@@ -1017,7 +1032,7 @@ function showNodeInfo(node) {
 function investigateNode() {
   if (!selectedNode) return;
   const d = selectedNode.data();
-  const q = `What if I compromise ${d.token} (${d.type})? ` +
+  const q = `What if I compromise ${d.fullLabel} (${d.type})? ` +
     `Map the complete kill chain from this entity to Domain Admin — ` +
     `every hop, every tool, every command. Include RBCD, delegation, and ACE paths.`;
   document.getElementById('chat-input').value = q;
@@ -1028,11 +1043,11 @@ function investigateNode() {
 function investigateEdge() {
   if (!selectedEdge) return;
   const e = selectedEdge;
-  const srcTok = e.source().data('token') || realLabel(e.source().data('fullLabel'));
-  const tgtTok = e.target().data('token') || realLabel(e.target().data('fullLabel'));
+  const srcName = e.source().data('fullLabel');
+  const tgtName = e.target().data('fullLabel');
   const rel = e.data('label');
   
-  const q = `How can I abuse the ${rel} privilege from ${srcTok} to ${tgtTok}? Provide the exact tools, commands, and requirements.`;
+  const q = `How can I abuse the ${rel} privilege from ${srcName} to ${tgtName}? Provide the exact tools, commands, and requirements.`;
   document.getElementById('chat-input').value = q;
   document.getElementById('chat-input').focus();
   document.getElementById('edge-info').style.display = 'none';
