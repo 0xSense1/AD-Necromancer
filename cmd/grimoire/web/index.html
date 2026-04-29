@@ -1093,82 +1093,7 @@ function getIcon(type) {
   }
 }
 
-function initCytoscape(data) {
-  edgeIdx = 0;
 
-  globalNodes = data.nodes.map(n => ({
-    group: 'nodes',
-    data: {
-      id:          n.id,
-      label:       shortLabel(realLabel(n.label)),
-      displayLabel: getIcon(n.type) + shortLabel(realLabel(n.label)),
-      fullLabel:   realLabel(n.label),
-      token:       n.properties?.token    || '',
-      type:        n.type,
-      domain:      n.properties?.domain   || '',
-      admincount:  n.properties?.admincount === 'true',
-      highvalue:   n.properties?.highvalue  === 'true',
-      enabled:     n.properties?.enabled   !== 'false',
-      description: n.properties?.description || '',
-      sam:         n.properties?.sam || '',
-      os:          n.properties?.os  || '',
-    }
-  }));
-
-  const edgeSeen = new Set();
-  globalEdges = [];
-  for (const e of data.edges) {
-    const key = `${e.source}|${e.relation}|${e.target}`;
-    if (!edgeSeen.has(key)) {
-      edgeSeen.add(key);
-      globalEdges.push({ group:'edges', data:{
-        id: `e${edgeIdx++}`, source: e.source, target: e.target, label: e.relation
-      }});
-    }
-  }
-
-  if (cy) cy.destroy();
-
-  cy = cytoscape({
-    container: document.getElementById('cy'),
-    elements:  [],
-    style:     buildStyle(),
-    layout:    { name: 'preset' },
-    wheelSensitivity: 0.3,
-    minZoom: 0.04,
-    maxZoom: 6,
-  });
-
-  cy.on('tap', 'node', evt => {
-    selectedNode = evt.target;
-    highlightNeighbors(selectedNode);
-    showNodeInfo(selectedNode);
-  });
-
-  cy.on('tap', 'edge', evt => {
-    const e = evt.target;
-    selectedEdge = e;
-    const src = realLabel(e.source().data('fullLabel'));
-    const tgt = realLabel(e.target().data('fullLabel'));
-    
-    document.getElementById('edge-info-title').textContent = e.data('label');
-    document.getElementById('edge-props').innerHTML = `
-      <div class="node-prop"><span class="np-k">Source</span><span class="np-v" title="${esc(src)}">${esc(src)}</span></div>
-      <div class="node-prop"><span class="np-k">Target</span><span class="np-v" title="${esc(tgt)}">${esc(tgt)}</span></div>
-    `;
-    document.getElementById('edge-info').style.display = 'block';
-  });
-
-  cy.on('tap', evt => {
-    if (evt.target === cy) {
-      clearHighlight();
-      document.getElementById('node-info').style.display = 'none';
-      document.getElementById('edge-info').style.display = 'none';
-      selectedNode = null;
-      selectedEdge = null;
-    }
-  });
-}
 
 // ── D3 Graph Renderer ─────────────────────────────────────────────────────────
 
@@ -1227,7 +1152,10 @@ function initCytoscape(data) {
     }
   }
 
-  renderD3Graph(globalNodes, globalEdges);
+  resetGraph();
+  if (globalNodes.length > 0) {
+    addSystemMessage(`⚡ Data loaded into memory (${globalNodes.length} nodes, ${globalEdges.length} edges). The graph is hidden to save browser memory until the AI highlights a specific path.`);
+  }
 }
 
 function renderD3Graph(nodes, edges) {
@@ -1588,8 +1516,6 @@ function investigateEdge() {
 }
 
 function highlightPath(rawPath) {
-  if (!d3gMain) return;
-
   // Step 1: detokenize first so ENTITY_NNN become real names
   const pathStr = detokenize(rawPath || '');
 
@@ -1635,14 +1561,9 @@ function highlightPath(rawPath) {
     if (found) { matchedNodes.push(found); usedIds.add(found.data.id); }
   }
 
-  // Step 4: Highlight the path
-  d3gMain.selectAll('.d3-node-card')
-    .classed('dimmed', n => !usedIds.has(n.id))
-    .classed('highlighted', n => usedIds.has(n.id));
-
-  d3gMain.selectAll('.d3-edge')
-    .classed('dimmed', e => !usedIds.has(e.source) || !usedIds.has(e.target))
-    .classed('d3-edge-highlighted', e => usedIds.has(e.source) && usedIds.has(e.target));
+  // Step 4: Render only the matched path
+  const matchedEdges = globalEdges.filter(e => usedIds.has(e.data.source) && usedIds.has(e.data.target));
+  renderD3Graph(matchedNodes, matchedEdges);
 
   if (matchedNodes.length > 0) {
     const firstNode = d3Nodes.find(n => n.id === matchedNodes[0].data.id);
