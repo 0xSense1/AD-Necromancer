@@ -1353,7 +1353,7 @@ func buildSummary(g *GraphData) string {
 			if n.Properties["enabled"] == "false" {
 				stale = " [STALE-DISABLED]"
 			}
-			fmt.Fprintf(&sb, "- %s (%s%s, domain=%s)\n", tok, n.Type, stale, n.Properties["domain"])
+			fmt.Fprintf(&sb, "- %s (%s%s)\n", tok, n.Type, stale)
 			found++
 		}
 	}
@@ -1369,8 +1369,8 @@ func buildSummary(g *GraphData) string {
 		}
 		s := labelByID[e.Source]
 		t := labelByID[e.Target]
-		if s == "" { s = e.Source }
-		if t == "" { t = e.Target }
+		if s == "" { s = "UNKNOWN" }
+		if t == "" { t = "UNKNOWN" }
 		fmt.Fprintf(&sb, "- %s →[%s]→ %s\n", s, e.Relation, t)
 	}
 	return sb.String()
