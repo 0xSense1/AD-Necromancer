@@ -1484,13 +1484,19 @@ function showNodeInfo(node) {
 }
 
 function focusSelectedNode() {
-  if (!selectedNode || !cy) return;
-  cy.animate({ center: { eles: selectedNode }, zoom: Math.min(cy.zoom() * 1.8, 4) }, { duration: 300 });
+  if (!selectedNode || !d3svg) return;
+  const d = selectedNode;
+  if (!d || d.x === undefined) return;
+  const container = document.getElementById('cy');
+  d3svg.transition().duration(400).call(
+    d3.zoom().transform,
+    d3.zoomIdentity.translate(container.clientWidth/2 - d.x, container.clientHeight/2 - d.y)
+  );
 }
 
 function investigateNode() {
   if (!selectedNode) return;
-  const d = selectedNode.data();
+  const d = selectedNode;
   const q = `WHAT IF analysis: If ${d.fullLabel} (${d.type}) were compromised, ` +
     `what is the blast radius? Trace every BloodHound relationship chain from this entity ` +
     `— delegation paths, ACE rights, group memberships, and RBCD paths. ` +
@@ -1503,9 +1509,9 @@ function investigateNode() {
 function investigateEdge() {
   if (!selectedEdge) return;
   const e = selectedEdge;
-  const srcName = e.source().data('fullLabel');
-  const tgtName = e.target().data('fullLabel');
-  const rel = e.data('label');
+  const srcName = e._source ? e._source.fullLabel : (e.source.fullLabel || e.source);
+  const tgtName = e._target ? e._target.fullLabel : (e.target.fullLabel || e.target);
+  const rel = e.label;
   
   const q = `Audit analysis: What is the risk of the ${rel} relationship from ${srcName} to ${tgtName}? ` +
     `Why does this relationship exist, should it still exist, what would happen if it were misused, ` +
