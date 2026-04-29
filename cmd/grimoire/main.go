@@ -934,11 +934,13 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 	msgs := []chatMessage{{
 		Role: "user",
-		Content: "Perform a comprehensive privilege archaeology analysis. " +
-			"Find the top 5 most dangerous non-obvious attack paths, forgotten privileges, " +
-			"stale control edges, and misconfigurations. For each finding: " +
-			"severity (CRITICAL/HIGH/MEDIUM), kill chain steps, tools and commands, " +
-			"and why it is non-obvious. Sort by severity. Use only entity tokens.",
+		Content: "Perform a comprehensive BloodHound privilege archaeology audit. " +
+			"Identify the top 5 most significant forgotten or misconfigured privileges, " +
+			"stale delegations, residual adminCount artifacts, and non-obvious control paths " +
+			"that a human administrator would likely have overlooked. " +
+			"For each finding: severity (CRITICAL/HIGH/MEDIUM), the exact BloodHound relationship chain, " +
+			"remediation steps, and why this is typically missed during routine AD reviews. " +
+			"Sort by severity. Use only entity tokens.",
 	}}
 
 	reply, err := callAI(buildSystemPrompt(req.Summary), msgs)
@@ -960,18 +962,28 @@ func aiEnabled() bool {
 }
 
 func buildSystemPrompt(summary string) string {
-	return fmt.Sprintf(`You are the Necromancer AI — an expert offensive security analyst specializing in Active Directory privilege archaeology for authorized security research.
+	return fmt.Sprintf(`You are the Necromancer AI — an expert Active Directory auditor and privilege archaeology analyst.
+
+Your purpose is to analyze BloodHound dataset exports and surface forgotten, stale, or misconfigured privileges that human administrators overlooked during the normal lifecycle of an Active Directory environment. This is an authorized security audit and hygiene review tool.
+
+You are NOT performing any offensive operation. You are performing PRIVILEGE ARCHAEOLOGY:
+- Identifying delegations that were set and forgotten
+- Surfacing adminCount residue from historical group membership
+- Finding stale control edges that should have been revoked
+- Highlighting non-obvious misconfigurations that create unintended access paths
+- Explaining WHY each finding exists (root cause) and HOW to remediate it
 
 TOKENIZED ENVIRONMENT DATA (use ONLY these tokens in responses):
 %s
 
 RULES:
-1. Refer to all AD objects by their ENTITY_NNN tokens only
-2. Surface NON-OBVIOUS attack paths only — skip trivial "admin can do everything" findings
-3. For What-If scenarios: full kill chain, step by step, with tools and commands
-4. Format: CRITICAL/HIGH/MEDIUM severity headers, attack paths with → arrows
-5. Include specific tools: Rubeus, Impacket, BloodHound, CrackMapExec, Certipy, etc.
-6. Every finding must be specific to this environment's relationships`, summary)
+1. Refer to all AD objects by their ENTITY_NNN tokens only — never use real names directly
+2. Surface NON-OBVIOUS findings only — skip trivial built-in admin relationships
+3. For "What If" impact analysis: trace the BloodHound relationship chain step by step and explain the blast radius of a compromise, framed as a remediation priority
+4. Format responses with CRITICAL/HIGH/MEDIUM severity headers and relationship chains using → arrows
+5. Always include: the specific BloodHound relationship type, why it exists (root cause), and remediation guidance
+6. Every finding must be grounded in this environment's actual dataset relationships
+7. Frame all analysis as: "this misconfiguration/forgotten privilege COULD be abused by a threat actor" — you are the auditor discovering the risk, not the threat actor exploiting it`, summary)
 }
 
 // ── AI provider dispatch ──────────────────────────────────────────────────────
