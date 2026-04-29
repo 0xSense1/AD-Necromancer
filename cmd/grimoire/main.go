@@ -695,11 +695,24 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // ── Agent + offline upload ────────────────────────────────────────────────────
 
+// agentEvent is broadcast over SSE when an agent connects or finishes uploading.
+type agentEvent struct {
+	Type      string `json:"type"`      // "connecting" | "received" | "error"
+	IP        string `json:"ip"`
+	Timestamp string `json:"timestamp"`
+	Nodes     int    `json:"nodes,omitempty"`
+	Edges     int    `json:"edges,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 func handleAgentUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", 405)
 		return
 	}
+
+	agentIP := clientIP(r)
 
 	keyHex := r.Header.Get("X-Session-Key")
 	if keyHex == "" {
@@ -718,15 +731,47 @@ func handleAgentUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Beacon 1: agent has connected and data received, now decrypting ──────
+	if evtData, e := json.Marshal(agentEvent{
+		Type:      "connecting",
+		IP:        agentIP,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Bytes:     len(encData),
+	}); e == nil {
+		broadcastSSE("agent", string(evtData))
+	}
+
 	graph, err := decryptAndParse(encData, key)
 	if err != nil {
 		log.Printf("[!] Upload error: %v", err)
+		// Beacon: parse error
+		if evtData, e := json.Marshal(agentEvent{
+			Type:      "error",
+			IP:        agentIP,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Error:     err.Error(),
+		}); e == nil {
+			broadcastSSE("agent", string(evtData))
+		}
 		http.Error(w, err.Error(), 400)
 		return
 	}
 
 	storeAndBroadcast(graph)
-	log.Printf("[+] Agent upload: %d nodes, %d edges", len(graph.Nodes), len(graph.Edges))
+
+	// ── Beacon 2: data fully parsed and graph broadcast ───────────────────────
+	if evtData, e := json.Marshal(agentEvent{
+		Type:      "received",
+		IP:        agentIP,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Nodes:     len(graph.Nodes),
+		Edges:     len(graph.Edges),
+		Bytes:     len(encData),
+	}); e == nil {
+		broadcastSSE("agent", string(evtData))
+	}
+
+	log.Printf("[+] Agent upload: %d nodes, %d edges from %s", len(graph.Nodes), len(graph.Edges), agentIP)
 	fmt.Fprintln(w, "received")
 }
 
@@ -797,11 +842,11 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 		close(ch)
 	}()
 
-	// Send current data immediately if available
+	// Send current graph immediately if available (typed event so UI handles correctly)
 	graphMu.RLock()
 	if currentGraph != nil {
 		if data, err := json.Marshal(currentGraph); err == nil {
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			fmt.Fprintf(w, "event: graph\ndata: %s\n\n", data)
 			flusher.Flush()
 		}
 	}
@@ -816,7 +861,8 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			// msg is already pre-formatted as "event: TYPE\ndata: JSON"
+			fmt.Fprintf(w, "%s\n\n", msg)
 			flusher.Flush()
 		case <-hb.C:
 			fmt.Fprintf(w, ": heartbeat\n\n")
@@ -1320,13 +1366,11 @@ func buildSummary(g *GraphData) string {
 
 // ── SSE broadcast ─────────────────────────────────────────────────────────────
 
-func storeAndBroadcast(g *GraphData) {
-	graphMu.Lock()
-	currentGraph = g
-	graphMu.Unlock()
-
-	data, _ := json.Marshal(g)
-	msg := string(data)
+// broadcastSSE sends a typed SSE message (event: TYPE\ndata: DATA) to all
+// connected clients. The channel carries pre-formatted strings; handleSSE
+// appends the trailing double-newline when writing to the response.
+func broadcastSSE(eventType, data string) {
+	msg := fmt.Sprintf("event: %s\ndata: %s", eventType, data)
 	sseMu.Lock()
 	for ch := range sseClients {
 		select {
@@ -1335,6 +1379,15 @@ func storeAndBroadcast(g *GraphData) {
 		}
 	}
 	sseMu.Unlock()
+}
+
+func storeAndBroadcast(g *GraphData) {
+	graphMu.Lock()
+	currentGraph = g
+	graphMu.Unlock()
+
+	data, _ := json.Marshal(g)
+	broadcastSSE("graph", string(data))
 }
 
 // ── Credentials ───────────────────────────────────────────────────────────────

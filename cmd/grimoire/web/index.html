@@ -525,6 +525,77 @@
     ::-webkit-scrollbar-track { background:var(--bg); }
     ::-webkit-scrollbar-thumb { background:var(--border-hot); border-radius:3px; }
     ::-webkit-scrollbar-thumb:hover { background:var(--red); }
+
+    /* ── Agent Beacon Notification ──────────────────────────────────────────── */
+    #agent-beacon {
+      position: fixed;
+      top: -120px;
+      right: 18px;
+      z-index: 2000;
+      width: 320px;
+      background: linear-gradient(135deg, #0d0a14 0%, #1a0d24 100%);
+      border: 1px solid var(--border-hot);
+      padding: 12px 16px;
+      box-shadow: 0 0 32px rgba(138,32,96,.0);
+      transition: top .38s cubic-bezier(.22,1,.36,1), box-shadow .4s;
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      pointer-events: none;
+    }
+    #agent-beacon.show {
+      top: 58px;
+    }
+    #agent-beacon.beacon-connecting {
+      border-color: var(--red-bright);
+      box-shadow: 0 0 24px rgba(231,76,60,.45);
+      animation: beacon-pulse-red 1.1s ease-in-out infinite;
+    }
+    #agent-beacon.beacon-received {
+      border-color: var(--green);
+      box-shadow: 0 0 24px rgba(39,174,96,.5);
+      animation: beacon-pulse-green 1.6s ease-in-out 2;
+    }
+    #agent-beacon.beacon-error {
+      border-color: var(--red-dark);
+      box-shadow: 0 0 16px rgba(192,57,43,.5);
+    }
+    @keyframes beacon-pulse-red {
+      0%,100% { box-shadow: 0 0 16px rgba(231,76,60,.3); }
+      50%      { box-shadow: 0 0 36px rgba(231,76,60,.85); }
+    }
+    @keyframes beacon-pulse-green {
+      0%,100% { box-shadow: 0 0 16px rgba(39,174,96,.3); }
+      50%      { box-shadow: 0 0 36px rgba(39,174,96,.85); }
+    }
+    #beacon-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 6px currentColor);
+    }
+    #beacon-body { flex: 1; min-width: 0; }
+    #beacon-title {
+      font-family: var(--title);
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: var(--red-bright);
+      margin-bottom: 4px;
+    }
+    #beacon-title.green { color: var(--green); }
+    #beacon-title.orange { color: var(--orange); }
+    #beacon-ip   { font-size: 11px; color: var(--cyan);     margin-bottom: 2px; }
+    #beacon-detail { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #beacon-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--red-bright);
+      flex-shrink: 0;
+      animation: beacon-blink 0.8s ease-in-out infinite;
+    }
+    #beacon-dot.green  { background: var(--green); animation: none; }
+    #beacon-dot.orange { background: var(--orange); animation: none; }
+    @keyframes beacon-blink {
+      0%,100% { opacity: 1; } 50% { opacity: 0.15; }
+    }
   </style>
 </head>
 <body>
@@ -544,6 +615,17 @@
     <button class="btn btn-purple" onclick="openModal()">⚡ OFFLINE UPLOAD</button>
     <button class="btn btn-ghost" onclick="logout()">⎋ LOGOUT</button>
   </div>
+</div>
+
+<!-- ── Agent Beacon Notification ───────────────────────────────────────────── -->
+<div id="agent-beacon">
+  <div id="beacon-icon">📡</div>
+  <div id="beacon-body">
+    <div id="beacon-title">AGENT BEACON</div>
+    <div id="beacon-ip">—</div>
+    <div id="beacon-detail">Waiting for signal…</div>
+  </div>
+  <div id="beacon-dot"></div>
 </div>
 
 <!-- ── Main ─────────────────────────────────────────────────────────────────── -->
@@ -757,10 +839,90 @@ const PROVIDER_DEFAULTS = {
 const evtSource = new EventSource('/api/events');
 evtSource.onopen  = () => setStatus('● CONNECTED — AWAITING DATA', 'connected');
 evtSource.onerror = () => setStatus('● CONNECTION LOST — RETRYING…', 'error');
-evtSource.onmessage = e => {
+
+// Typed event: full graph push (from agent upload or reconnect)
+evtSource.addEventListener('graph', e => {
   try { loadGraph(JSON.parse(e.data)); }
-  catch(err) { console.error('SSE parse:', err); }
-};
+  catch(err) { console.error('SSE graph parse:', err); }
+});
+
+// Typed event: agent connection beacon (connecting → received | error)
+evtSource.addEventListener('agent', e => {
+  try { handleAgentEvent(JSON.parse(e.data)); }
+  catch(err) { console.error('SSE agent parse:', err); }
+});
+
+// ── Agent Beacon ──────────────────────────────────────────────────────────────
+let beaconTimer = null;
+
+function handleAgentEvent(evt) {
+  const beacon  = document.getElementById('agent-beacon');
+  const icon    = document.getElementById('beacon-icon');
+  const title   = document.getElementById('beacon-title');
+  const ip      = document.getElementById('beacon-ip');
+  const detail  = document.getElementById('beacon-detail');
+  const dot     = document.getElementById('beacon-dot');
+
+  // Clear any pending auto-hide timer
+  if (beaconTimer) { clearTimeout(beaconTimer); beaconTimer = null; }
+
+  // Reset classes
+  beacon.classList.remove('beacon-connecting', 'beacon-received', 'beacon-error');
+  title.classList.remove('green', 'orange');
+  dot.classList.remove('green', 'orange');
+
+  const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+  ip.textContent = `🌐 ${evt.ip || 'unknown'}  ·  ${ts}`;
+
+  if (evt.type === 'connecting') {
+    beacon.classList.add('beacon-connecting');
+    icon.textContent = '📡';
+    title.textContent = 'AGENT CONNECTING';
+    const kb = evt.bytes ? `${(evt.bytes/1024).toFixed(1)} KB` : '…';
+    detail.textContent = `Received ${kb} — decrypting payload…`;
+    dot.className = '';
+    // Update header status
+    setStatus('● AGENT SIGNAL — DECRYPTING…', 'connected');
+
+  } else if (evt.type === 'received') {
+    beacon.classList.add('beacon-received');
+    icon.textContent = '✅';
+    title.textContent = 'DATA INGESTED';
+    title.classList.add('green');
+    const kb = evt.bytes ? `${(evt.bytes/1024).toFixed(1)} KB` : '?';
+    detail.textContent = `${evt.nodes} nodes · ${evt.edges} edges · ${kb}`;
+    dot.classList.add('green');
+    // Also post a system message to chat
+    addSystemMessage(`📡 Agent data received from ${evt.ip} — ${evt.nodes} entities, ${evt.edges} edges ingested.`);
+    // Auto-dismiss after 8 s
+    beaconTimer = setTimeout(() => hideBeacon(), 8000);
+
+  } else if (evt.type === 'error') {
+    beacon.classList.add('beacon-error');
+    icon.textContent = '⚠️';
+    title.textContent = 'AGENT ERROR';
+    title.classList.add('orange');
+    detail.textContent = evt.error || 'Unknown parse error';
+    dot.classList.add('orange');
+    addSystemMessage(`⚠️ Agent upload from ${evt.ip} failed: ${evt.error}`);
+    beaconTimer = setTimeout(() => hideBeacon(), 10000);
+  }
+
+  beacon.classList.add('show');
+}
+
+function hideBeacon() {
+  document.getElementById('agent-beacon').classList.remove('show');
+}
+
+function addSystemMessage(text) {
+  const msgs = document.getElementById('chat-messages');
+  const div  = document.createElement('div');
+  div.className = 'chat-msg system';
+  div.textContent = text;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
 
 // ── AI Badge ─────────────────────────────────────────────────────────────────
 async function refreshAIBadge() {
