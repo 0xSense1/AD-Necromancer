@@ -202,7 +202,7 @@
       position: absolute;
       bottom: 14px;
       left: 14px;
-      width: 270px;
+      width: 300px;
       background: rgba(13,16,24,.97);
       border: 1px solid var(--border-hot);
       padding: 14px;
@@ -210,6 +210,13 @@
       z-index: 10;
       box-shadow: 0 0 24px rgba(138,32,96,.25);
     }
+    #node-info-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 7px;
+    }
+    #node-enabled-badge { font-size: 10px; letter-spacing: 1px; }
     #node-info-title {
       font-family: var(--title);
       color: var(--red);
@@ -223,7 +230,6 @@
       display: inline-block;
       padding: 2px 8px;
       font-size: 10px;
-      margin-bottom: 9px;
       border-radius: 2px;
     }
     .t-User         { background:#1e0847; color:#9b59b6; border:1px solid #6c3483; }
@@ -239,6 +245,59 @@
     .np-k { color: var(--text-dim); flex-shrink:0; }
     .np-v { color: var(--cyan); text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .np-v.warn { color: var(--gold); }
+    .node-btn-row { display:flex; gap:6px; margin-top:11px; }
+    .node-btn-row .btn { flex:1; font-size:10px; padding:5px 6px; text-align:center; }
+
+    /* Path Inspector */
+    #path-inspector {
+      position: absolute;
+      bottom: -180px;
+      left: 0; right: 0;
+      background: linear-gradient(180deg, transparent 0%, rgba(10,8,20,.97) 10%);
+      border-top: 1px solid var(--border-hot);
+      padding: 14px 16px 12px;
+      z-index: 20;
+      transition: bottom .35s cubic-bezier(.22,1,.36,1);
+    }
+    #path-inspector.show { bottom: 0; }
+    #path-inspector-header {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 10px;
+      font-size: 10px; letter-spacing: 2px; color: var(--red);
+    }
+    #path-summary { color: var(--text-dim); font-size: 10px; flex: 1; }
+    #path-inspector-header button {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text-dim); font-family: var(--mono); font-size: 10px;
+      padding: 2px 8px; cursor: pointer; transition: all .15s;
+    }
+    #path-inspector-header button:hover { border-color: var(--red); color: var(--red); }
+    #path-chips {
+      display: flex; align-items: stretch; gap: 0;
+      overflow-x: auto; padding-bottom: 4px; flex-wrap: nowrap;
+    }
+    .path-chip {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 7px 12px; border: 1px solid var(--border);
+      cursor: pointer; transition: all .18s; flex-shrink: 0;
+      min-width: 80px; background: rgba(15,17,23,.9);
+    }
+    .path-chip:hover { border-color: var(--gold); box-shadow: 0 0 10px rgba(212,172,13,.3); transform: translateY(-2px); }
+    .path-chip.t-User         { border-color: #6c3483; }
+    .path-chip.t-Group        { border-color: #922b21; }
+    .path-chip.t-Computer     { border-color: #2e86c1; }
+    .path-chip.t-Domain       { border-color: #b7950b; }
+    .path-chip.t-GPO          { border-color: #1e8449; }
+    .path-chip.t-OU           { border-color: #2874a6; }
+    .path-chip.t-CertTemplate { border-color: #ad1457; }
+    .path-chip.t-EnterpriseCA { border-color: #880e4f; }
+    .chip-icon  { font-size: 14px; margin-bottom: 3px; }
+    .chip-step  { font-size: 9px; color: var(--text-dim); margin-bottom: 2px; font-weight: bold; }
+    .chip-name  { font-size: 11px; color: var(--text); white-space: nowrap; max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+    .chip-type  { font-size: 9px; color: var(--text-dim); margin-top: 2px; }
+    .path-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 4px; flex-shrink: 0; }
+    .path-edge-label { font-size: 8px; color: var(--text-dim); white-space: nowrap; margin-bottom: 2px; max-width: 70px; overflow: hidden; text-overflow: ellipsis; }
+    .path-arrow-sym { font-size: 14px; color: var(--red-bright); }
 
     /* Legend */
     #legend {
@@ -368,6 +427,8 @@
       border-left: 2px solid var(--purple-dim);
       color: var(--text);
       align-self: flex-start;
+      /* No pre-wrap here — assistant messages use formatAnalysis HTML spans */
+      white-space: normal;
     }
     .chat-msg.system {
       background: rgba(10,20,18,.7);
@@ -642,11 +703,26 @@
 
     <!-- Node info card -->
     <div id="node-info">
+      <div id="node-info-header">
+        <span id="node-badge" class="node-badge"></span>
+        <span id="node-enabled-badge"></span>
+      </div>
       <div id="node-info-title">—</div>
-      <span id="node-badge" class="node-badge"></span>
       <div id="node-props"></div>
-      <button class="btn" style="width:100%;margin-top:11px;font-size:11px;"
-              onclick="investigateNode()">☠ WHAT IF I COMPROMISE THIS?</button>
+      <div class="node-btn-row">
+        <button class="btn" onclick="focusSelectedNode()">🎯 FOCUS</button>
+        <button class="btn" onclick="investigateNode()">☠ WHAT IF?</button>
+      </div>
+    </div>
+
+    <!-- Path Inspector -->
+    <div id="path-inspector">
+      <div id="path-inspector-header">
+        <span>⚔ ATTACK PATH</span>
+        <span id="path-summary"></span>
+        <button onclick="closePathInspector()">✕ CLOSE</button>
+      </div>
+      <div id="path-chips"></div>
     </div>
 
     <!-- Edge info card -->
@@ -1075,30 +1151,38 @@ function buildStyle() {
         'border-width': 2,
         'border-color': '#5a3070',
         'label': 'data(displayLabel)',
-        'color': '#b0b0c0',
-        'font-size': '9px',
+        'color': '#e8e8f8',
+        'font-size': '10px',
         'font-family': '"Share Tech Mono", monospace',
-        'text-valign': 'bottom',
+        'text-valign': 'center',
         'text-halign': 'center',
-        'text-margin-y': '4px',
-        'width': 36,
-        'height': 36,
-        'text-max-width': '75px',
+        'text-outline-color': '#08080f',
+        'text-outline-width': '2px',
+        'width': 50,
+        'height': 50,
+        'text-max-width': '64px',
         'text-wrap': 'ellipsis',
         'overlay-opacity': 0,
       }
     }
   ];
 
-  // Type colours
+  // Type colours + distinct shapes
+  const TYPE_SHAPES = {
+    User: 'ellipse', Group: 'diamond', Computer: 'roundrectangle',
+    Domain: 'pentagon', GPO: 'tag', OU: 'barrel',
+    CertTemplate: 'hexagon', EnterpriseCA: 'star',
+  };
   for (const [type, c] of Object.entries(TYPE_COLORS)) {
     s.push({ selector: `node[type="${type}"]`,
-      style: { 'background-color': c.bg, 'border-color': c.border, 'color': c.text } });
+      style: { 'background-color': c.bg, 'border-color': c.border, 'color': c.text,
+               'shape': TYPE_SHAPES[type] || 'ellipse' } });
   }
 
-  // High-value nodes get larger
+  // High-value nodes get larger + gold glow
   s.push({ selector: 'node[?admincount],[?highvalue]',
-    style: { 'width': 50, 'height': 50, 'border-width': 3, 'font-size': '10px' } });
+    style: { 'width': 66, 'height': 66, 'border-width': 3, 'font-size': '11px',
+             'border-color': '#d4ac0d', 'shadow-blur': 16, 'shadow-color': '#d4ac0d', 'shadow-opacity': 0.5 } });
 
   // Disabled = ghost
   s.push({ selector: 'node[enabled=false]',
@@ -1166,29 +1250,45 @@ function clearHighlight() {
 
 function showNodeInfo(node) {
   const d = node.data();
-  document.getElementById('node-info-title').textContent = realLabel(d.fullLabel);
+  const realName = realLabel(d.fullLabel);
 
+  // Badge + enabled indicator
   const badge = document.getElementById('node-badge');
   badge.textContent = d.type;
   badge.className = `node-badge t-${d.type}`;
 
+  const enabledBadge = document.getElementById('node-enabled-badge');
+  if (d.enabled) {
+    enabledBadge.textContent = '● ACTIVE';
+    enabledBadge.style.color = 'var(--green)';
+  } else {
+    enabledBadge.textContent = '● STALE';
+    enabledBadge.style.color = 'var(--text-dim)';
+  }
+
+  document.getElementById('node-info-title').textContent = realName;
+
+  const neighborCount = cy ? node.neighborhood('node').length : 0;
   const props = [
-    ['Token',       d.token],
     ['Domain',      d.domain],
-    ['Enabled',     d.enabled ? '✓ Yes' : '✗ No (STALE)'],
-    ['AdminCount',  d.admincount ? '⚠ YES' : 'No'],
     ['SAM',         d.sam],
     ['OS',          d.os],
+    ['AdminCount',  d.admincount ? '⚠ YES — HIGH VALUE' : null],
+    ['Neighbors',   neighborCount > 0 ? `${neighborCount} connected` : null],
     ['Description', d.description],
   ].filter(([,v]) => v);
 
   document.getElementById('node-props').innerHTML = props.map(([k,v]) => {
-    const warn = (k==='Enabled'&&!d.enabled)||(k==='AdminCount'&&d.admincount);
-    return `<div class="node-prop"><span class="np-k">${esc(k)}</span>
-            <span class="np-v${warn?' warn':''}" title="${esc(v)}">${esc(v)}</span></div>`;
+    const warn = k === 'AdminCount';
+    return `<div class="node-prop"><span class="np-k">${esc(k)}</span><span class="np-v${warn?' warn':''}" title="${esc(String(v))}">${esc(String(v))}</span></div>`;
   }).join('');
 
   document.getElementById('node-info').style.display = 'block';
+}
+
+function focusSelectedNode() {
+  if (!selectedNode || !cy) return;
+  cy.animate({ center: { eles: selectedNode }, zoom: Math.min(cy.zoom() * 1.8, 4) }, { duration: 300 });
 }
 
 function investigateNode() {
@@ -1215,46 +1315,124 @@ function investigateEdge() {
   document.getElementById('edge-info').style.display = 'none';
 }
 
-function highlightPath(pathStr) {
+function highlightPath(rawPath) {
   if (!cy) return;
-  resetGraph();
-  
-  const parts = pathStr.split(/→|->/);
-  const nodeNames = parts.map(p => {
-    let name = p.replace(/\[.*?\]/g, '').trim();
-    name = name.replace(/^[-*0-9.]+\s*/, '');
-    name = name.replace(/\*/g, '');
-    name = name.replace(/\$$/, '');
-    return name.toLowerCase();
-  }).filter(n => n);
 
-  const matchedNodes = globalNodes.filter(n => {
-    const fl = (n.data.fullLabel||'').toLowerCase();
-    const sl = (n.data.label||'').toLowerCase();
-    const sam = (n.data.sam||'').toLowerCase();
-    return nodeNames.some(nn => 
-      fl.includes(nn) || nn.includes(fl) || sl === nn || sam === nn || fl === nn + '$' || sam === nn + '$'
-    );
-  });
+  // Step 1: detokenize first so ENTITY_NNN become real names
+  const pathStr = detokenize(rawPath || '');
 
-  const nodeIds = new Set(matchedNodes.map(n => n.data.id));
+  // Step 2: split on any arrow variant, extract node name from each segment
+  const segments = pathStr.split(/\s*(?:→|->|──▶|--?>|⟶)\s*/);
+  const nodeNames = segments.map(seg => {
+    return seg
+      .replace(/\[.*?\]/g, '')   // strip [EdgeLabel]
+      .replace(/^[-*•·\d.]+\s*/, '') // strip list bullets
+      .replace(/[`*_]/g, '')     // strip markdown
+      .trim();
+  }).filter(n => n.length > 1);
 
-  const matchedEdges = globalEdges.filter(e => {
-    return nodeIds.has(e.data.source) && nodeIds.has(e.data.target);
-  });
+  if (nodeNames.length === 0) return;
 
+  // Step 3: ordered matching — preserve path sequence, each name used once
+  const usedIds = new Set();
+  const matchedNodes = [];
+
+  for (const name of nodeNames) {
+    const nl = name.toLowerCase().replace(/\$$/, '');
+    let found = null;
+
+    // Exact full label
+    found = globalNodes.find(n => !usedIds.has(n.data.id) &&
+      (n.data.fullLabel||'').toLowerCase() === nl);
+    // Exact short label
+    if (!found) found = globalNodes.find(n => !usedIds.has(n.data.id) &&
+      (n.data.label||'').toLowerCase() === nl);
+    // Exact SAM
+    if (!found) found = globalNodes.find(n => !usedIds.has(n.data.id) &&
+      (n.data.sam||'').toLowerCase() === nl);
+    // Partial: fullLabel contains name
+    if (!found) found = globalNodes.find(n => !usedIds.has(n.data.id) &&
+      (n.data.fullLabel||'').toLowerCase().includes(nl) && nl.length > 3);
+    // Partial: name contains shortLabel
+    if (!found) found = globalNodes.find(n => {
+      if (usedIds.has(n.data.id)) return false;
+      const sl = (n.data.label||'').toLowerCase();
+      return sl.length > 3 && nl.includes(sl);
+    });
+
+    if (found) { matchedNodes.push(found); usedIds.add(found.data.id); }
+  }
+
+  // Step 4: edges between matched nodes
+  const matchedEdges = globalEdges.filter(e =>
+    usedIds.has(e.data.source) && usedIds.has(e.data.target));
+
+  // Step 5: render
+  cy.elements().remove();
   cy.add([...matchedNodes, ...matchedEdges]);
   cy.elements().addClass('highlighted');
 
-  if (cy.elements().length > 0) {
-    cy.layout({
-      name: 'breadthfirst',
-      directed: true,
-      spacingFactor: 1.5,
-      animate: true,
-      animationDuration: 380,
-    }).run();
+  if (matchedNodes.length > 0) {
+    cy.layout({ name: 'breadthfirst', directed: true,
+      spacingFactor: 2.0, animate: true, animationDuration: 400 }).run();
   }
+
+  // Step 6: show Path Inspector chip-chain
+  showPathInspector(matchedNodes, pathStr);
+}
+
+function showPathInspector(matchedNodes, pathStr) {
+  const chips = document.getElementById('path-chips');
+  const summary = document.getElementById('path-summary');
+  if (!chips) return;
+  chips.innerHTML = '';
+
+  // Extract edge labels from [EdgeLabel] patterns in path string
+  const edgeLabels = (pathStr.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1,-1));
+
+  matchedNodes.forEach((node, i) => {
+    const icon = { User:'👤', Group:'👥', Computer:'💻', Domain:'🌐',
+                   GPO:'📜', OU:'📁', CertTemplate:'🔖', EnterpriseCA:'🏛' }[node.data.type] || '◆';
+    const chip = document.createElement('div');
+    chip.className = `path-chip t-${node.data.type}`;
+    chip.innerHTML =
+      `<span class="chip-icon">${icon}</span>` +
+      `<span class="chip-step">STEP ${i+1}</span>` +
+      `<span class="chip-name" title="${esc(node.data.fullLabel||node.data.label)}">${esc(shortLabel(node.data.fullLabel||node.data.label))}</span>` +
+      `<span class="chip-type">${esc(node.data.type)}</span>`;
+    chip.onclick = () => focusNodeById(node.data.id);
+    chips.appendChild(chip);
+
+    if (i < matchedNodes.length - 1) {
+      const arrow = document.createElement('div');
+      arrow.className = 'path-arrow';
+      arrow.innerHTML =
+        `<span class="path-edge-label">${esc(edgeLabels[i] || '')}</span>` +
+        `<span class="path-arrow-sym">▶</span>`;
+      chips.appendChild(arrow);
+    }
+  });
+
+  if (summary) {
+    summary.textContent = matchedNodes.length > 0
+      ? `${matchedNodes.length} nodes · click chip to focus`
+      : 'No matching nodes found in graph';
+  }
+  document.getElementById('path-inspector').classList.add('show');
+}
+
+function focusNodeById(nodeId) {
+  if (!cy) return;
+  const node = cy.getElementById(nodeId);
+  if (node.length === 0) return;
+  cy.animate({ center: { eles: node }, zoom: Math.min(cy.zoom() * 1.8, 4) }, { duration: 300 });
+  highlightNeighbors(node);
+  selectedNode = node;
+  showNodeInfo(node);
+}
+
+function closePathInspector() {
+  document.getElementById('path-inspector').classList.remove('show');
 }
 
 function resetGraph() {
@@ -1262,6 +1440,7 @@ function resetGraph() {
   cy.elements().remove();
   document.getElementById('node-info').style.display = 'none';
   document.getElementById('edge-info').style.display = 'none';
+  closePathInspector();
   selectedNode = null;
   selectedEdge = null;
 }
@@ -1279,9 +1458,20 @@ function tokenize(text) {
 function detokenize(text) {
   if (!text) return text;
   let r = text;
-  for (const [tok, real] of Object.entries(reverseMap)) {
+
+  // Pass 1: exact token replacement from reverseMap (e.g. ENTITY_001 → real name)
+  const sorted = Object.entries(reverseMap).sort((a,b) => b[0].length - a[0].length);
+  for (const [tok, real] of sorted) {
     if (tok && real) r = r.split(tok).join(real);
   }
+
+  // Pass 2: catch padding variants the AI writes (ENTITY_1 or ENTITY_01 instead of ENTITY_001)
+  // Normalise the numeric part to 3-digit zero-padded form and retry the lookup.
+  r = r.replace(/\bENTITY_(\d+)\b/gi, (match, num) => {
+    const padded = 'ENTITY_' + String(Number(num)).padStart(3, '0');
+    return reverseMap[padded] || reverseMap[match.toUpperCase()] || match;
+  });
+
   return r;
 }
 
@@ -1326,8 +1516,13 @@ async function sendChat() {
     if (data.error) {
       addMsg('system', `⚠ Error: ${data.error}`);
     } else {
+      // Detokenize then pass through formatAnalysis so:
+      // • ENTITY_ tokens are fully resolved
+      // • Path lines become clickable chips
+      // • Severity markers (CRITICAL/HIGH/MEDIUM) are coloured
+      // • **bold** markdown is rendered
       const reply = detokenize(data.reply);
-      addMsg('assistant', reply);
+      addMsg('assistant', formatAnalysis(reply), false, true);
       chatHistory.push({ role: 'assistant', content: data.reply });
       if (chatHistory.length > MAX_CHAT_HISTORY) {
         chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
@@ -1449,7 +1644,7 @@ function formatAnalysis(text) {
       const prefix = safe.substring(0, pathStart);
       const pathContent = safe.substring(pathStart);
       
-      safe = `${prefix}<span class="path-link" style="color:#ffd700; cursor:pointer; text-decoration:underline;" onclick="highlightPath(this.innerText)">${pathContent}</span>`;
+      safe = `${prefix}<span class="path-link" style="color:#ffd700; cursor:pointer; text-decoration:underline;" onclick="highlightPath(this.textContent)">${pathContent}</span>`;
     }
 
     // **bold** (after escaping, ** are still literal)
