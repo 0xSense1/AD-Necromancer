@@ -1697,6 +1697,34 @@ async function sendChat() {
     chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
   }
 
+  // --- LOCAL RAG: Inject context for queried entities ---
+  const mentionedTokens = new Set([...tokenized.matchAll(/ENTITY_\d{3}/g)].map(m => m[0]));
+  let dynamicContext = '';
+  
+  if (mentionedTokens.size > 0 && globalNodes.length > 0) {
+    const idToToken = {};
+    globalNodes.forEach(n => { idToToken[n.data.id] = n.data.token; });
+    
+    dynamicContext += '\n\n=== RELEVANT LOCAL GRAPH CONTEXT ===\n';
+    
+    const ctxNodes = globalNodes.filter(n => mentionedTokens.has(n.data.token));
+    for (const n of ctxNodes) {
+      dynamicContext += `- ${n.data.token} (${n.data.type})\n`;
+    }
+    
+    const ctxEdges = globalEdges.filter(e => 
+      mentionedTokens.has(idToToken[e.data.source]) || 
+      mentionedTokens.has(idToToken[e.data.target])
+    );
+    
+    for (let i = 0; i < Math.min(ctxEdges.length, 100); i++) {
+      const e = ctxEdges[i].data;
+      const srcToken = idToToken[e.source] || e.source;
+      const tgtToken = idToToken[e.target] || e.target;
+      dynamicContext += `- ${srcToken} →[${e.label}]→ ${tgtToken}\n`;
+    }
+  }
+
   const tempId = addMsg('assistant', '☠ Consulting the Grimoire… ⟳', true);
 
   try {
@@ -1706,7 +1734,7 @@ async function sendChat() {
       body: JSON.stringify({
         message: tokenized,
         history: chatHistory.slice(-20),
-        summary: tokenize(graphSummary),
+        summary: tokenize(graphSummary) + dynamicContext,
       }),
     });
     const data = await res.json();
